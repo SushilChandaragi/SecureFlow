@@ -2,3 +2,11 @@ __pycache__/
 *.pyc
 .venv/
 SecureFlow_Vault/
+.env
+*.env
+dist/
+build/
+*.spec
+secure/
+secure.zip
+*.zip

@@ -1,0 +1,7 @@
+boto3
+cryptography
+customtkinter
+pillow
+pymupdf
+pyserial
+python-dotenv

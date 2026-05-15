@@ -4,13 +4,18 @@ from __future__ import annotations
 from pathlib import Path
 import time
 import gc
+import logging
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 import fitz  # PyMuPDF
 from PIL import Image
 
+from cloud_manager import CloudManager, CloudManagerError
 from crypto_engine import CryptoEngine, CryptoEngineError
+
+
+logger = logging.getLogger(__name__)
 
 
 COLORS = {
@@ -54,9 +59,10 @@ class VaultGUI(ctk.CTk):
         self._zoom_factor = 2.0
         self._file_buttons: list[ctk.CTkButton] = []
         self._viewer_has_content = False
+        self.cloud: CloudManager | None = None
         self._hardware_port: str = ""
         self._hardware_monitor_id: str | None = None
-        self._last_selected_path: Path | None = None
+        self._last_selected_object: tuple[str, str] | None = None
 
         self.title("SecureFlow Vault")
         self.geometry("1280x720")
@@ -64,6 +70,7 @@ class VaultGUI(ctk.CTk):
         self.configure(fg_color=COLORS["bg"])
 
         self._build_layout()
+        self._init_cloud()
         self.refresh_vault_listing()
         self._set_unlocked_state(self.crypto.is_unlocked, message="Vault is locked. Hardware tap required.")
 
@@ -141,12 +148,29 @@ class VaultGUI(ctk.CTk):
         )
         self.encrypt_button.grid(row=2, column=0, sticky="ew", padx=16, pady=6)
 
+        self.vault_header_row = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.vault_header_row.grid(row=3, column=0, sticky="ew", padx=16, pady=(18, 8))
+        self.vault_header_row.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            self.sidebar_frame,
+            self.vault_header_row,
             text="Vault Browser",
             font=FONTS["section"],
             text_color=COLORS["muted"],
-        ).grid(row=3, column=0, sticky="w", padx=16, pady=(18, 8))
+        ).grid(row=0, column=0, sticky="w")
+
+        self.refresh_cloud_button = ctk.CTkButton(
+            self.vault_header_row,
+            text="Refresh Cloud",
+            width=120,
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=self.refresh_vault_listing,
+        )
+        self.refresh_cloud_button.grid(row=0, column=1, sticky="e")
 
         self.vault_list_frame = ctk.CTkScrollableFrame(
             self.sidebar_frame,
@@ -280,6 +304,15 @@ class VaultGUI(ctk.CTk):
         color = COLORS["danger"] if is_error else COLORS["muted"]
         self.status_message.configure(text=message, text_color=color)
 
+    def _init_cloud(self) -> None:
+        try:
+            self.cloud = CloudManager()
+        except CloudManagerError as exc:
+            self.cloud = None
+            self._set_status_message(str(exc), is_error=True)
+            messagebox.showerror("Cloud Setup", str(exc))
+            logger.exception("Cloud initialization failed")
+
     def _build_badge(self, parent: ctk.CTkFrame, text: str) -> ctk.CTkLabel:
         return ctk.CTkLabel(
             parent,
@@ -365,18 +398,26 @@ class VaultGUI(ctk.CTk):
             self._set_unlocked_state(True, message="Hardware tap accepted. Session unlocked.")
             self._log_event("Hardware tap accepted. HKDF key derived in RAM.")
 
-            # Auto-open the last selected file or the most recent file for immediate feedback.
-            target = self._last_selected_path or self._get_latest_enc_file()
+            self.refresh_vault_listing()
+
+            # Auto-open the last selection, then fallback to local, then cloud.
+            target = (
+                self._last_selected_object
+                or self._get_latest_local_object()
+                or self._get_latest_cloud_object()
+            )
             if target is not None:
-                self._open_encrypted_file(target)
+                self._open_encrypted_file(target[0], target[1])
         except CryptoEngineError as exc:
             self._set_unlocked_state(False, message=str(exc), is_error=True)
             self._log_event(f"Hardware tap failed: {exc}")
             messagebox.showerror("Hardware Tap Failed", str(exc))
+            logger.warning("Hardware tap failed: %s", exc)
         except Exception as exc:
             self._set_unlocked_state(False, message=f"Unexpected error: {exc}", is_error=True)
             self._log_event(f"Hardware tap failed: {exc}")
             messagebox.showerror("Hardware Tap Failed", str(exc))
+            logger.exception("Hardware tap failed")
 
     def _auto_detect_port(self) -> None:
         try:
@@ -422,7 +463,7 @@ class VaultGUI(ctk.CTk):
 
     def _on_encrypt_click(self) -> None:
         if not self.crypto.is_unlocked:
-            self._set_unlocked_state(False, message="Vault is locked. Simulate hardware tap.")
+            self._set_unlocked_state(False, message="Vault is locked. Hardware tap required.")
             return
 
         filepath = filedialog.askopenfilename(
@@ -434,64 +475,106 @@ class VaultGUI(ctk.CTk):
 
         try:
             dest_path = self.crypto.encrypt_file(filepath)
-            self._set_status_message(f"Encrypted to: {dest_path.name}")
-            self._log_event(f"File encrypted and sealed: {dest_path.name}")
+            self._set_status_message(f"Saved locally: {dest_path.name}")
+            self._log_event(f"File encrypted and sealed locally: {dest_path.name}")
+
+            if self.cloud:
+                self._set_status_message("Uploading to AWS...")
+                self._log_event("Uploading encrypted file to AWS S3.")
+                self.cloud.upload_vault_file(str(dest_path), dest_path.name, delete_local=False)
+                self._set_status_message(f"Uploaded to AWS: {dest_path.name}")
+                self._log_event(f"Uploaded to AWS: {dest_path.name}")
+
             self.refresh_vault_listing()
+        except CloudManagerError as exc:
+            self._set_status_message(str(exc), is_error=True)
+            self._log_event(f"Cloud upload failed: {exc}")
+            messagebox.showerror("Cloud Upload Failed", str(exc))
+            logger.warning("Cloud upload failed: %s", exc)
         except CryptoEngineError as exc:
             self._set_status_message(str(exc), is_error=True)
             self._log_event(f"Encrypt failed: {exc}")
+            logger.warning("Encrypt failed: %s", exc)
         except Exception as exc:
             self._set_status_message(f"Unexpected error: {exc}", is_error=True)
             self._log_event(f"Encrypt failed: {exc}")
+            logger.exception("Encrypt failed")
 
     def refresh_vault_listing(self) -> None:
         for child in self.vault_list_frame.winfo_children():
             child.destroy()
         self._file_buttons.clear()
 
+        items_added = 0
+
         enc_files = sorted(self.crypto.vault_dir.glob("*.enc"))
-        if not enc_files:
+        for path in enc_files:
+            label = f"LOCAL | {path.name}"
+            self._add_vault_button(label, "local", str(path))
+            items_added += 1
+
+        if self.cloud:
+            try:
+                objects = self.cloud.get_vault_inventory()
+            except CloudManagerError as exc:
+                self._set_status_message(str(exc), is_error=True)
+                messagebox.showerror("Cloud Error", str(exc))
+                logger.warning("Cloud list failed: %s", exc)
+            else:
+                enc_objects = [name for name in objects if name.lower().endswith(".enc")]
+                for name in enc_objects:
+                    label = f"CLOUD | {name}"
+                    self._add_vault_button(label, "cloud", name)
+                    items_added += 1
+
+        if items_added == 0:
             ctk.CTkLabel(
                 self.vault_list_frame,
                 text="No encrypted files yet.",
                 font=FONTS["body"],
                 text_color=COLORS["muted"],
             ).pack(fill="x", padx=10, pady=8)
-            return
 
-        for path in enc_files:
-            button = ctk.CTkButton(
-                self.vault_list_frame,
-                text=path.name,
-                anchor="w",
-                fg_color=COLORS["panel"],
-                hover_color=COLORS["panel_alt_hover"],
-                text_color=COLORS["text"],
-                command=lambda p=path: self._open_encrypted_file(p),
-            )
-            state = "normal" if self.crypto.is_unlocked else "disabled"
-            button.configure(state=state)
-            button.pack(fill="x", padx=8, pady=4)
-            self._file_buttons.append(button)
-
-    def _open_encrypted_file(self, path: Path) -> None:
+    def _open_encrypted_file(self, source: str, identifier: str) -> None:
         if not self.crypto.is_unlocked:
             self._set_unlocked_state(False, message="Vault is locked. Hardware tap required.")
             return
 
         try:
-            self._last_selected_path = path
             port = self._hardware_port or self.port_entry.get().strip()
-            data = self.crypto.decrypt_to_memory(path, com_port=port)
+
+            if source == "local":
+                path = Path(identifier)
+                if not path.is_file():
+                    raise CryptoEngineError(f"Encrypted file not found: {path}")
+                data = self.crypto.decrypt_to_memory(path, com_port=port)
+                display_name = path.name
+            else:
+                if not self.cloud:
+                    raise CloudManagerError("Cloud not configured.")
+
+                self._set_status_message(f"Downloading from AWS: {identifier}")
+                buffer = self.cloud.download_to_buffer(identifier)
+                data = self.crypto.decrypt_blob(buffer.getvalue(), com_port=port)
+                display_name = identifier
+
+            self._last_selected_object = (source, identifier)
             self._display_bytes(data)
-            self._set_status_message(f"Decrypted in memory: {path.name}")
-            self._log_event(f"Decrypted in RAM: {path.name}")
+            self._set_status_message(f"Decrypted in memory: {display_name}")
+            self._log_event(f"Decrypted in RAM: {display_name}")
+        except CloudManagerError as exc:
+            self._set_status_message(str(exc), is_error=True)
+            self._log_event(f"Cloud download failed: {exc}")
+            messagebox.showerror("Cloud Download Failed", str(exc))
+            logger.warning("Cloud download failed: %s", exc)
         except CryptoEngineError as exc:
             self._set_status_message(str(exc), is_error=True)
             self._log_event(f"Decrypt failed: {exc}")
+            logger.warning("Decrypt failed: %s", exc)
         except Exception as exc:
             self._set_status_message(f"Unexpected error: {exc}", is_error=True)
             self._log_event(f"Decrypt failed: {exc}")
+            logger.exception("Decrypt failed")
 
     def _display_bytes(self, data: bytes) -> None:
         self._clear_viewer()
@@ -589,15 +672,47 @@ class VaultGUI(ctk.CTk):
         self._stop_hardware_monitor()
         self.destroy()
 
-    def _get_latest_enc_file(self) -> Path | None:
+    def _get_latest_local_object(self) -> tuple[str, str] | None:
         enc_files = list(self.crypto.vault_dir.glob("*.enc"))
         if not enc_files:
             return None
 
         try:
-            return max(enc_files, key=lambda path: path.stat().st_mtime)
+            latest = max(enc_files, key=lambda path: path.stat().st_mtime)
         except OSError:
-            return enc_files[0]
+            latest = enc_files[0]
+
+        return ("local", str(latest))
+
+    def _get_latest_cloud_object(self) -> tuple[str, str] | None:
+        if not self.cloud:
+            return None
+
+        try:
+            objects = self.cloud.get_vault_inventory()
+        except CloudManagerError:
+            return None
+
+        enc_objects = [name for name in objects if name.lower().endswith(".enc")]
+        if not enc_objects:
+            return None
+
+        return ("cloud", enc_objects[-1])
+
+    def _add_vault_button(self, label: str, source: str, identifier: str) -> None:
+        button = ctk.CTkButton(
+            self.vault_list_frame,
+            text=label,
+            anchor="w",
+            fg_color=COLORS["panel"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            command=lambda s=source, i=identifier: self._open_encrypted_file(s, i),
+        )
+        state = "normal" if self.crypto.is_unlocked else "disabled"
+        button.configure(state=state)
+        button.pack(fill="x", padx=8, pady=4)
+        self._file_buttons.append(button)
 
     def _start_hardware_monitor(self) -> None:
         self._stop_hardware_monitor()

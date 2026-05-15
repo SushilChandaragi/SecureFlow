@@ -160,13 +160,20 @@ class CryptoEngine:
 
         No plaintext is ever written to disk.
         """
-        self._require_key()
-
         enc_path = Path(enc_filepath)
         if not enc_path.is_file():
             raise CryptoEngineError(f"Encrypted file not found: {enc_path}")
 
         blob = enc_path.read_bytes()
+        return self.decrypt_blob(blob, com_port=com_port)
+
+    def decrypt_blob(self, blob: bytes, com_port: Optional[str] = None) -> bytes:
+        """Decrypt an encrypted blob already resident in memory.
+
+        This is used for cloud downloads where encrypted data must never touch disk.
+        """
+        self._require_key()
+
         if len(blob) < 4:
             raise CryptoEngineError("Encrypted file is too small or corrupted.")
 
