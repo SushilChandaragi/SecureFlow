@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
-from tkinter import filedialog
+import gc
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 import fitz  # PyMuPDF
@@ -47,8 +48,15 @@ class VaultGUI(ctk.CTk):
 
         self.crypto = crypto_engine
         self._pdf_image: ctk.CTkImage | None = None
+        self._pdf_images: list[ctk.CTkImage] = []
+        self._pdf_bytes: bytes | None = None
+        self._pdf_scroll_frame: ctk.CTkScrollableFrame | None = None
+        self._zoom_factor = 2.0
         self._file_buttons: list[ctk.CTkButton] = []
         self._viewer_has_content = False
+        self._hardware_port: str = ""
+        self._hardware_monitor_id: str | None = None
+        self._last_selected_path: Path | None = None
 
         self.title("SecureFlow Vault")
         self.geometry("1280x720")
@@ -57,7 +65,10 @@ class VaultGUI(ctk.CTk):
 
         self._build_layout()
         self.refresh_vault_listing()
-        self._set_unlocked_state(self.crypto.is_unlocked, message="Vault is locked. Simulate hardware tap.")
+        self._set_unlocked_state(self.crypto.is_unlocked, message="Vault is locked. Hardware tap required.")
+
+        # Auto-tap on launch for demo convenience.
+        self.after(300, self._auto_tap_on_launch)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -79,15 +90,44 @@ class VaultGUI(ctk.CTk):
             text_color=COLORS["text"],
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 10))
 
+        self.handshake_row = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.handshake_row.grid(row=1, column=0, sticky="ew", padx=16, pady=6)
+        self.handshake_row.grid_columnconfigure(0, weight=1)
+        self.handshake_row.grid_columnconfigure(1, weight=0)
+        self.handshake_row.grid_columnconfigure(2, weight=0)
+
         self.handshake_button = ctk.CTkButton(
-            self.sidebar_frame,
-            text="Simulate Hardware Tap",
+            self.handshake_row,
+            text="Hardware Tap",
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color=COLORS["text"],
             command=self._on_handshake_click,
         )
-        self.handshake_button.grid(row=1, column=0, sticky="ew", padx=16, pady=6)
+        self.handshake_button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        self.port_entry = ctk.CTkEntry(
+            self.handshake_row,
+            width=90,
+            placeholder_text="COM3",
+            fg_color=COLORS["panel_alt"],
+            text_color=COLORS["text"],
+            border_color=COLORS["border"],
+        )
+        self.port_entry.grid(row=0, column=1, sticky="e", padx=(0, 6))
+
+        self.detect_button = ctk.CTkButton(
+            self.handshake_row,
+            text="Auto",
+            width=52,
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=self._auto_detect_port,
+        )
+        self.detect_button.grid(row=0, column=2, sticky="e")
 
         self.encrypt_button = ctk.CTkButton(
             self.sidebar_frame,
@@ -191,10 +231,48 @@ class VaultGUI(ctk.CTk):
         self.viewer_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["panel"], corner_radius=12)
         self.viewer_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 16))
         self.viewer_frame.grid_columnconfigure(0, weight=1)
-        self.viewer_frame.grid_rowconfigure(0, weight=1)
+        self.viewer_frame.grid_rowconfigure(1, weight=1)
+
+        self.viewer_toolbar = ctk.CTkFrame(self.viewer_frame, fg_color=COLORS["panel_alt"], corner_radius=10)
+        self.viewer_toolbar.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
+        self.viewer_toolbar.grid_columnconfigure(1, weight=1)
+
+        self.zoom_out_button = ctk.CTkButton(
+            self.viewer_toolbar,
+            text="-",
+            width=38,
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=lambda: self._adjust_zoom(-0.25),
+        )
+        self.zoom_out_button.grid(row=0, column=0, padx=(8, 4), pady=8)
+
+        self.zoom_label = ctk.CTkLabel(
+            self.viewer_toolbar,
+            text="100%",
+            font=FONTS["body"],
+            text_color=COLORS["muted"],
+        )
+        self.zoom_label.grid(row=0, column=1)
+
+        self.zoom_in_button = ctk.CTkButton(
+            self.viewer_toolbar,
+            text="+",
+            width=38,
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=lambda: self._adjust_zoom(0.25),
+        )
+        self.zoom_in_button.grid(row=0, column=2, padx=(4, 8), pady=8)
 
         self.viewer_content = ctk.CTkFrame(self.viewer_frame, fg_color=COLORS["panel_alt"], corner_radius=10)
-        self.viewer_content.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        self.viewer_content.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
         self.viewer_content.grid_columnconfigure(0, weight=1)
         self.viewer_content.grid_rowconfigure(0, weight=1)
 
@@ -232,7 +310,11 @@ class VaultGUI(ctk.CTk):
         for child in self.viewer_content.winfo_children():
             child.destroy()
         self._pdf_image = None
+        self._pdf_images.clear()
+        self._pdf_bytes = None
+        self._pdf_scroll_frame = None
         self._viewer_has_content = False
+        gc.collect()  # Ensure dereferenced images are cleared promptly.
 
         if placeholder_text is not None:
             placeholder = ctk.CTkLabel(
@@ -260,6 +342,7 @@ class VaultGUI(ctk.CTk):
             self.encrypt_button.configure(state="disabled")
             for button in self._file_buttons:
                 button.configure(state="disabled")
+            self._stop_hardware_monitor()
             self._set_badge_state(self.badge_key, False)
             self._set_badge_state(self.badge_plaintext, False)
             self._set_badge_state(self.badge_aes, False)
@@ -270,16 +353,72 @@ class VaultGUI(ctk.CTk):
             self._set_status_message(message, is_error=is_error)
 
     def _on_handshake_click(self) -> None:
+        port = self.port_entry.get().strip()
+        if not port:
+            messagebox.showerror("Hardware Tap", "Enter a COM port (e.g., COM3).")
+            return
+
         try:
-            self.crypto.mock_handshake()
+            self.crypto.hardware_handshake(port)
+            self._hardware_port = port
+            self._start_hardware_monitor()
             self._set_unlocked_state(True, message="Hardware tap accepted. Session unlocked.")
             self._log_event("Hardware tap accepted. HKDF key derived in RAM.")
+
+            # Auto-open the last selected file or the most recent file for immediate feedback.
+            target = self._last_selected_path or self._get_latest_enc_file()
+            if target is not None:
+                self._open_encrypted_file(target)
         except CryptoEngineError as exc:
             self._set_unlocked_state(False, message=str(exc), is_error=True)
             self._log_event(f"Hardware tap failed: {exc}")
+            messagebox.showerror("Hardware Tap Failed", str(exc))
         except Exception as exc:
             self._set_unlocked_state(False, message=f"Unexpected error: {exc}", is_error=True)
             self._log_event(f"Hardware tap failed: {exc}")
+            messagebox.showerror("Hardware Tap Failed", str(exc))
+
+    def _auto_detect_port(self) -> None:
+        try:
+            import serial.tools.list_ports
+
+            ports = list(serial.tools.list_ports.comports())
+        except Exception as exc:
+            messagebox.showerror("Auto Detect", f"Unable to scan serial ports: {exc}")
+            return
+
+        if not ports:
+            messagebox.showerror("Auto Detect", "No serial devices detected.")
+            return
+
+        preferred = None
+        for port in ports:
+            description = (port.description or "").lower()
+            if any(token in description for token in ("usb", "uart", "cp210", "ch340", "esp32")):
+                preferred = port
+                break
+
+        selected = preferred or ports[0]
+        self.port_entry.delete(0, "end")
+        self.port_entry.insert(0, selected.device)
+        self._set_status_message(f"Detected device on {selected.device}")
+        self._log_event(f"Auto-detected serial port: {selected.device}")
+
+    def _auto_tap_on_launch(self) -> None:
+        if self.crypto.is_unlocked:
+            return
+
+        port = self.port_entry.get().strip()
+        if not port:
+            self._auto_detect_port()
+            port = self.port_entry.get().strip()
+
+        if not port:
+            self._set_status_message("No COM port found for auto-tap.", is_error=True)
+            return
+
+        # Reuse the existing handshake flow.
+        self._on_handshake_click()
 
     def _on_encrypt_click(self) -> None:
         if not self.crypto.is_unlocked:
@@ -337,11 +476,13 @@ class VaultGUI(ctk.CTk):
 
     def _open_encrypted_file(self, path: Path) -> None:
         if not self.crypto.is_unlocked:
-            self._set_unlocked_state(False, message="Vault is locked. Simulate hardware tap.")
+            self._set_unlocked_state(False, message="Vault is locked. Hardware tap required.")
             return
 
         try:
-            data = self.crypto.decrypt_to_memory(path)
+            self._last_selected_path = path
+            port = self._hardware_port or self.port_entry.get().strip()
+            data = self.crypto.decrypt_to_memory(path, com_port=port)
             self._display_bytes(data)
             self._set_status_message(f"Decrypted in memory: {path.name}")
             self._log_event(f"Decrypted in RAM: {path.name}")
@@ -382,31 +523,108 @@ class VaultGUI(ctk.CTk):
         textbox.grid(row=0, column=0, sticky="nsew")
 
     def _display_pdf(self, data: bytes) -> None:
-        # PyMuPDF accepts bytes directly, keeping plaintext in memory only.
-        doc = fitz.open(stream=data, filetype="pdf")
-        page = doc.load_page(0)
+        # Keep bytes in memory only; do not touch disk.
+        self._pdf_bytes = data
+        self._zoom_factor = max(self._zoom_factor, 0.5)
+        self._render_pdf_pages()
 
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-        image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    def _render_pdf_pages(self) -> None:
+        # Clear previous images/widgets to avoid retaining plaintext in memory.
+        for child in self.viewer_content.winfo_children():
+            child.destroy()
+        self._pdf_images.clear()
+        self._pdf_scroll_frame = None
+        gc.collect()
 
-        self.update_idletasks()
-        max_width = max(self.viewer_content.winfo_width() - 24, 200)
-        scale = min(1.0, max_width / pixmap.width)
-        new_size = (int(pixmap.width * scale), int(pixmap.height * scale))
-        resample = getattr(Image, "Resampling", Image).LANCZOS
-        image = image.resize(new_size, resample)
+        if not self._pdf_bytes:
+            return
 
-        self._pdf_image = ctk.CTkImage(light_image=image, dark_image=image, size=new_size)
-        label = ctk.CTkLabel(self.viewer_content, image=self._pdf_image, text="")
-        label.grid(row=0, column=0, sticky="nsew")
+        # Requirement: load PDF from memory buffer only.
+        doc = fitz.open("pdf", self._pdf_bytes)
+        self._pdf_scroll_frame = ctk.CTkScrollableFrame(
+            self.viewer_content,
+            fg_color=COLORS["panel_alt"],
+            border_width=0,
+        )
+        self._pdf_scroll_frame.grid(row=0, column=0, sticky="nsew")
+        self._pdf_scroll_frame.grid_columnconfigure(0, weight=1)
+
+        for page_index in range(doc.page_count):
+            page = doc.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(self._zoom_factor, self._zoom_factor), alpha=False)
+            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+
+            size = (pixmap.width, pixmap.height)
+            page_image = ctk.CTkImage(light_image=image, dark_image=image, size=size)
+            self._pdf_images.append(page_image)
+
+            label = ctk.CTkLabel(self._pdf_scroll_frame, image=page_image, text="")
+            label.pack(fill="x", padx=12, pady=(0, 12))
+
+        doc.close()
+        self._update_zoom_label()
+
+    def _adjust_zoom(self, delta: float) -> None:
+        if not self._pdf_bytes:
+            return
+
+        self._zoom_factor = max(0.5, min(4.0, self._zoom_factor + delta))
+        # Re-render pages at the new zoom; old images are destroyed and GC'd.
+        self._render_pdf_pages()
+
+    def _update_zoom_label(self) -> None:
+        percent = int(self._zoom_factor * 50)
+        self.zoom_label.configure(text=f"{percent}%")
 
     def _on_panic(self) -> None:
         # Wipe key material and remove any decrypted content from the UI.
         self.crypto.lock_vault()
+        self._hardware_port = ""
         self._set_unlocked_state(False, message="Vault locked. Key wiped from RAM.")
         self._log_event("Vault locked. RAM key wiped with memset.")
 
     def _on_close(self) -> None:
         # Always wipe key material when exiting.
         self.crypto.lock_vault()
+        self._stop_hardware_monitor()
         self.destroy()
+
+    def _get_latest_enc_file(self) -> Path | None:
+        enc_files = list(self.crypto.vault_dir.glob("*.enc"))
+        if not enc_files:
+            return None
+
+        try:
+            return max(enc_files, key=lambda path: path.stat().st_mtime)
+        except OSError:
+            return enc_files[0]
+
+    def _start_hardware_monitor(self) -> None:
+        self._stop_hardware_monitor()
+        self._hardware_monitor_id = self.after(1500, self._check_hardware_connection)
+
+    def _stop_hardware_monitor(self) -> None:
+        if self._hardware_monitor_id is not None:
+            self.after_cancel(self._hardware_monitor_id)
+            self._hardware_monitor_id = None
+
+    def _check_hardware_connection(self) -> None:
+        if not self.crypto.is_unlocked or not self._hardware_port:
+            self._hardware_monitor_id = None
+            return
+
+        try:
+            import serial.tools.list_ports
+
+            ports = [port.device.upper() for port in serial.tools.list_ports.comports()]
+            if self._hardware_port.upper() not in ports:
+                raise RuntimeError("ESP32 disconnected")
+        except Exception:
+            self.crypto.lock_vault()
+            self._hardware_port = ""
+            self._set_unlocked_state(False, message="ESP32 disconnected. Key wiped from RAM.", is_error=True)
+            self._log_event("ESP32 disconnected. Vault locked and RAM wiped.")
+            self._hardware_monitor_id = None
+            return
+
+        self._hardware_monitor_id = self.after(1500, self._check_hardware_connection)
