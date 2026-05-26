@@ -155,6 +155,29 @@ class CryptoEngine:
 
         return dest_path
 
+    def encrypt_bytes_to_vault(self, data: bytes, filename: str, overwrite: bool = True) -> Path:
+        """Encrypt raw bytes and store them in the SecureFlow_Vault directory."""
+        self._require_key()
+        if self._handshake_nonce is None:
+            raise CryptoEngineError("Handshake nonce missing. Perform hardware tap again.")
+        if self._handshake_mode is None:
+            raise CryptoEngineError("Handshake mode unknown. Perform hardware tap again.")
+
+        file_nonce = secrets.token_bytes(self.FILE_NONCE_SIZE)
+        aesgcm = AESGCM(bytes(self._key))
+        ciphertext = aesgcm.encrypt(file_nonce, data, None)
+
+        mode = self.MODE_HARDWARE if self._handshake_mode == "hardware" else self.MODE_MOCK
+
+        blob = self.VAULT_HEADER_V3 + mode + self._handshake_nonce + file_nonce + ciphertext
+
+        dest_path = self._vault_dir / filename
+        if not overwrite:
+            dest_path = self._unique_path(dest_path)
+
+        dest_path.write_bytes(blob)
+        return dest_path
+
     def decrypt_to_memory(self, enc_filepath: str | Path, com_port: Optional[str] = None) -> bytes:
         """Decrypt a .enc file into memory and return raw bytes.
 

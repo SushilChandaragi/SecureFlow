@@ -31,7 +31,13 @@ def main() -> None:
     engine = CryptoEngine()
 
     app = VaultGUI(engine)
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        try:
+            app._on_close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
