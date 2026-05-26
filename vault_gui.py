@@ -49,7 +49,6 @@ COLORS = {
     "danger_hover":       "#DC2626",
     "border":             "#3F3F46",
     "badge_bg":           "#1E1B4B",
-    "badge_border":       "#3730A3",
     "badge_inactive":     "#18181B",
     "badge_text_inactive":"#52525B",
 }
@@ -59,9 +58,7 @@ FONTS = {
     "section": ("Segoe UI Variable", 14, "bold"),
     "status":  ("Segoe UI Variable", 16, "bold"),
     "body":    ("Segoe UI Variable", 13),
-    "label":   ("Segoe UI Variable", 12),
     "mono":    ("Consolas", 13),
-    "mono_sm": ("Consolas", 11),
     "badge":   ("Consolas", 10, "bold"),
     "totp":    ("Consolas", 42, "bold"),
 }
@@ -107,7 +104,6 @@ class VaultGUI(ctk.CTk):
 
         # Thread-safe queue: bg threads post here, main thread drains every 50ms
         self._ui_queue: queue.Queue = queue.Queue()
-        self._busy = False
         self._queue_pump_id = None
 
         self.title("SecureFlow Vault")
@@ -693,15 +689,6 @@ class VaultGUI(ctk.CTk):
     def _init_cloud_bg(self):
         """Called in background thread. Returns a CloudManager instance."""
         return CloudManager()
-
-    def _init_cloud_old_UNUSED(self) -> None:
-        try:
-            self.cloud = CloudManager()
-        except CloudManagerError as exc:
-            self.cloud = None
-            self._set_status_message(str(exc), is_error=True)
-            messagebox.showerror("Cloud Setup", str(exc))
-            logger.exception("Cloud initialization failed")
 
     def _on_add_password(self) -> None:
         website = self.website_entry.get().strip()
@@ -1586,8 +1573,7 @@ class VaultGUI(ctk.CTk):
         for path in enc_files:
             if path.name in {AUTH_STORE_FILENAME, PASSWORD_STORE_FILENAME}:
                 continue
-            label = f"LOCAL | {path.name}"
-            self._add_vault_button(label, "local", str(path))
+            self._add_vault_button(path.name, "local", str(path))
             items_added += 1
 
         if self.cloud:
@@ -1600,8 +1586,7 @@ class VaultGUI(ctk.CTk):
             else:
                 enc_objects = [name for name in objects if name.lower().endswith(".enc")]
                 for name in enc_objects:
-                    label = f"CLOUD | {name}"
-                    self._add_vault_button(label, "cloud", name)
+                    self._add_vault_button(name, "cloud", name)
                     items_added += 1
 
         if items_added == 0:
@@ -1787,8 +1772,11 @@ class VaultGUI(ctk.CTk):
         return ("cloud", enc_objects[-1])
 
     def _add_vault_button(self, label: str, source: str, identifier: str) -> None:
+        row = ctk.CTkFrame(self.vault_list_frame, fg_color="transparent")
+        row.grid_columnconfigure(0, weight=1)
+
         button = ctk.CTkButton(
-            self.vault_list_frame,
+            row,
             text=label,
             anchor="w",
             fg_color=COLORS["panel"],
@@ -1796,9 +1784,31 @@ class VaultGUI(ctk.CTk):
             text_color=COLORS["text"],
             command=lambda s=source, i=identifier: self._open_encrypted_file(s, i),
         )
+        button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        badge_text = "LOCAL" if source == "local" else "CLOUD"
+        if source == "local":
+            badge_fg = COLORS["badge_inactive"]
+            badge_text_color = COLORS["badge_text_inactive"]
+        else:
+            badge_fg = COLORS["badge_bg"]
+            badge_text_color = COLORS["text"]
+
+        badge = ctk.CTkLabel(
+            row,
+            text=badge_text,
+            font=FONTS["badge"],
+            text_color=badge_text_color,
+            fg_color=badge_fg,
+            corner_radius=10,
+            padx=8,
+            pady=2,
+        )
+        badge.grid(row=0, column=1, sticky="e")
+
         state = "normal" if self.crypto.is_unlocked else "disabled"
         button.configure(state=state)
-        button.pack(fill="x", padx=8, pady=4)
+        row.pack(fill="x", padx=8, pady=4)
         self._file_buttons.append(button)
 
     def _start_hardware_monitor(self) -> None:
