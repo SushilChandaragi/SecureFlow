@@ -13,6 +13,7 @@ import '../services/vault_provider.dart';
 import '../widgets/bento_card.dart';
 import '../widgets/tactical_label.dart';
 import '../widgets/hex_loader.dart';
+import '../utils/logger.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   final VoidCallback onUnlocked;
@@ -61,14 +62,27 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   Future<void> _onBiometricTap() async {
     if (_isAuthenticating) return;
+    sfLog('LoginScreen: biometric tap');
+    final auth = ref.read(authServiceProvider);
+    final available = await auth.isBiometricAvailable();
+    if (!mounted) return;
+    sfLog('LoginScreen: biometric available=$available');
+    if (!available) {
+      setState(() {
+        _isAuthenticating = false;
+        _statusText = 'BIOMETRIC NOT AVAILABLE — ENROLL FINGERPRINT';
+      });
+      return;
+    }
     setState(() {
       _isAuthenticating = true;
       _statusText = 'VERIFYING BIOMETRIC...';
     });
-    final auth = ref.read(authServiceProvider);
     final ok = await ref.read(sessionProvider.notifier).unlockWithBiometric(auth);
+    sfLog('LoginScreen: biometric result=$ok');
     if (!mounted) return;
     if (ok) {
+      sfLog('LoginScreen: navigating to dashboard');
       widget.onUnlocked();
     } else {
       setState(() {
@@ -80,9 +94,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   Future<void> _onNfcTap() async {
     if (_isNfcScanning) return;
+    sfLog('LoginScreen: NFC tap');
     final auth = ref.read(authServiceProvider);
     final available = await auth.isNfcAvailable();
     if (!mounted) return;
+    sfLog('LoginScreen: NFC available=$available');
     if (!available) {
       setState(() => _statusText = 'NFC NOT AVAILABLE ON THIS DEVICE');
       return;
@@ -94,8 +110,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     auth.startNfcSession(
       onPayload: (Uint8List payload) {
         if (!mounted) return;
+        sfLog('LoginScreen: NFC payload len=${payload.length}');
         ref.read(sessionProvider.notifier).unlockWithNfc(payload).then((ok) {
           if (!mounted) return;
+          sfLog('LoginScreen: NFC unlock result=$ok');
           if (ok) widget.onUnlocked();
           setState(() {
             _isNfcScanning = false;
@@ -105,9 +123,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
       },
       onError: (error) {
         if (!mounted) return;
+        sfLog('LoginScreen: NFC error=$error');
+        String message = 'NFC ERROR';
+        if (error.contains('NFC_UNAVAILABLE')) {
+          message = 'NFC NOT AVAILABLE ON THIS DEVICE';
+        } else if (error.contains('NFC_EMPTY_TAG')) {
+          message = 'NFC TAG EMPTY — WRITE SECRET';
+        } else if (error.contains('NFC_READ_ERROR')) {
+          message = 'NFC READ FAILED';
+        } else if (error.contains('NFC_SESSION_ERROR')) {
+          message = 'NFC SESSION ERROR';
+        }
         setState(() {
           _isNfcScanning = false;
-          _statusText = 'NFC ERROR';
+          _statusText = message;
         });
       },
     );
@@ -119,9 +148,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(SFSpacing.base),
-          child: Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.all(SFSpacing.base),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: SFSpacing.xl),
@@ -193,7 +225,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                   ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(height: SFSpacing.lg),
               Center(
                 child: Text(_statusText,
                     style: SFTypography.metadata.copyWith(
@@ -204,6 +236,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                 const HexLoader(bootSequence: SFCopy.cryptoBootSequence, showSequence: true),
               const SizedBox(height: SFSpacing.md),
             ],
+          ),
+            ),
           ),
         ),
       ),

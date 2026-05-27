@@ -18,6 +18,7 @@ class SecureStorageService {
   static const _kAwsRegion       = 'sf_aws_region';
   static const _kS3Bucket        = 'sf_s3_bucket_name';
   static const _kMockHardware    = 'sf_mock_hardware_secret';
+  static const _kNfcExpected     = 'sf_nfc_expected_secret';
   static const _kPasswordStore   = 'sf_password_store_cache';
   static const _kTotpStore       = 'sf_totp_store_cache';
 
@@ -57,6 +58,18 @@ class SecureStorageService {
 
   Future<Uint8List?> loadMockHardwareSecret() async {
     final b64 = await _storage.read(key: _kMockHardware);
+    if (b64 == null) return null;
+    return base64Decode(b64);
+  }
+
+  // ── NFC Expected Secret (bind to one tag) ───────────────────────────────
+
+  Future<void> saveNfcSecret(Uint8List secret) async {
+    await _storage.write(key: _kNfcExpected, value: base64Encode(secret));
+  }
+
+  Future<Uint8List?> loadNfcSecret() async {
+    final b64 = await _storage.read(key: _kNfcExpected);
     if (b64 == null) return null;
     return base64Decode(b64);
   }

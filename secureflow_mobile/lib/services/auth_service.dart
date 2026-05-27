@@ -8,6 +8,7 @@ library;
 import 'dart:typed_data';
 import 'package:local_auth/local_auth.dart';
 import 'package:nfc_manager/nfc_manager.dart';
+import '../utils/logger.dart';
 
 class AuthServiceException implements Exception {
   final String message;
@@ -41,6 +42,7 @@ class AuthService {
     String reason = 'PRESENT BIOMETRIC TO UNLOCK VAULT',
   }) async {
     try {
+      sfLog('AuthService: biometric prompt start');
       final authenticated = await _localAuth.authenticate(
         localizedReason: reason,
         options: const AuthenticationOptions(
@@ -48,8 +50,10 @@ class AuthService {
           stickyAuth: true,
         ),
       );
+      sfLog('AuthService: biometric result=$authenticated');
       return authenticated;
     } catch (e) {
+      sfLog('AuthService: biometric error=$e');
       throw AuthServiceException('Biometric error: $e');
     }
   }
@@ -75,9 +79,12 @@ class AuthService {
   }) async {
     final available = await isNfcAvailable();
     if (!available) {
+      sfLog('AuthService: NFC unavailable');
       onError('NFC_UNAVAILABLE');
       return;
     }
+
+    sfLog('AuthService: NFC session start');
 
     NfcManager.instance.startSession(
       onDiscovered: (NfcTag tag) async {
@@ -88,16 +95,19 @@ class AuthService {
             NfcManager.instance.stopSession(errorMessage: 'EMPTY TAG');
             return;
           }
+          sfLog('AuthService: NFC payload len=${payload.length}');
           // Pad or trim to exactly 32 bytes.
           final secret = _normalise32(payload);
           onPayload(secret);
           NfcManager.instance.stopSession();
         } catch (e) {
+          sfLog('AuthService: NFC read error=$e');
           onError('NFC_READ_ERROR: $e');
           NfcManager.instance.stopSession(errorMessage: 'READ FAILED');
         }
       },
       onError: (error) async {
+        sfLog('AuthService: NFC session error=${error.message}');
         onError('NFC_SESSION_ERROR: ${error.message}');
       },
     );
@@ -136,6 +146,34 @@ class AuthService {
           }
         }
       }
+    }
+    return _extractUid(tag);
+  }
+
+  Uint8List? _extractUid(NfcTag tag) {
+    final data = tag.data;
+    Uint8List? fromIdentifier(dynamic identifier) {
+      if (identifier is Uint8List) return identifier;
+      if (identifier is List) {
+        return Uint8List.fromList(identifier.cast<int>());
+      }
+      return null;
+    }
+
+    final nfca = data['nfca'];
+    if (nfca is Map && nfca['identifier'] != null) {
+      return fromIdentifier(nfca['identifier']);
+    }
+    final mfc = data['mifareclassic'];
+    if (mfc is Map && mfc['identifier'] != null) {
+      return fromIdentifier(mfc['identifier']);
+    }
+    final mfu = data['mifareultralight'];
+    if (mfu is Map && mfu['identifier'] != null) {
+      return fromIdentifier(mfu['identifier']);
+    }
+    if (data['identifier'] != null) {
+      return fromIdentifier(data['identifier']);
     }
     return null;
   }

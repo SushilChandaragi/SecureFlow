@@ -4,6 +4,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/vault_file.dart';
@@ -14,6 +15,7 @@ import '../services/crypto_service.dart';
 import '../services/cloud_service.dart';
 import '../services/auth_service.dart';
 import '../services/secure_storage_service.dart';
+import '../utils/logger.dart';
 
 // ─── Service Singletons ──────────────────────────────────────────────────────
 
@@ -74,10 +76,12 @@ class SessionNotifier extends StateNotifier<SessionState> {
       : super(const SessionState());
 
   Future<bool> unlockWithBiometric(AuthService auth) async {
+    sfLog('Session: unlockWithBiometric start');
     state = state.copyWith(isLoading: true, statusMessage: 'VERIFYING BIOMETRIC...');
     try {
       final ok = await auth.authenticateWithBiometric();
       if (!ok) {
+        sfLog('Session: biometric rejected');
         state = state.copyWith(
           isLoading: false,
           statusMessage: 'IDENTITY REJECTED',
@@ -85,8 +89,10 @@ class SessionNotifier extends StateNotifier<SessionState> {
         );
         return false;
       }
+      sfLog('Session: biometric accepted');
       return _performMockHandshake();
     } catch (e) {
+      sfLog('Session: biometric exception=$e');
       state = state.copyWith(
         isLoading: false,
         statusMessage: e.toString(),
@@ -97,12 +103,28 @@ class SessionNotifier extends StateNotifier<SessionState> {
   }
 
   Future<bool> unlockWithNfc(Uint8List nfcPayload) async {
+    sfLog('Session: unlockWithNfc start len=${nfcPayload.length}');
     state = state.copyWith(isLoading: true, statusMessage: 'VERIFYING NFC KEY...');
     try {
+      final expected = await _storage.loadNfcSecret();
+      if (expected == null) {
+        sfLog('Session: NFC secret not set; binding to first tag');
+        await _storage.saveNfcSecret(nfcPayload);
+      } else if (!_bytesEqual(expected, nfcPayload)) {
+        sfLog('Session: NFC key mismatch');
+        state = state.copyWith(
+          isLoading: false,
+          statusMessage: 'NFC KEY MISMATCH',
+          isError: true,
+        );
+        return false;
+      }
       _crypto.nfcHandshake(nfcPayload);
+      sfLog('Session: NFC handshake ok');
       _setUnlocked(authMethod: 'nfc');
       return true;
     } catch (e) {
+      sfLog('Session: NFC exception=$e');
       state = state.copyWith(
         isLoading: false,
         statusMessage: e.toString(),
@@ -112,21 +134,29 @@ class SessionNotifier extends StateNotifier<SessionState> {
     }
   }
 
+  bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    int diff = 0;
+    for (int i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i];
+    }
+    return diff == 0;
+  }
+
   Future<bool> _performMockHandshake() async {
-    final secret = await _storage.loadMockHardwareSecret();
+    var secret = await _storage.loadMockHardwareSecret();
     if (secret == null) {
-      state = state.copyWith(
-        isLoading: false,
-        statusMessage: 'HARDWARE SECRET NOT CONFIGURED',
-        isError: true,
-      );
-      return false;
+      sfLog('Session: mock secret missing -> generating');
+      secret = _generateSecret(32);
+      await _storage.saveMockHardwareSecret(secret);
     }
     try {
       _crypto.mockHandshake(secret);
+      sfLog('Session: mock handshake ok');
       _setUnlocked(authMethod: 'biometric');
       return true;
     } on CryptoServiceException catch (e) {
+      sfLog('Session: mock handshake error=${e.message}');
       state = state.copyWith(
         isLoading: false,
         statusMessage: e.message,
@@ -136,7 +166,15 @@ class SessionNotifier extends StateNotifier<SessionState> {
     }
   }
 
+  Uint8List _generateSecret(int length) {
+    final rng = Random.secure();
+    return Uint8List.fromList(
+      List.generate(length, (_) => rng.nextInt(256)),
+    );
+  }
+
   void _setUnlocked({required String authMethod}) {
+    sfLog('Session: unlocked via $authMethod');
     final profile = UserProfile(
       deviceName: 'ANDROID DEVICE',
       sessionId: DateTime.now().millisecondsSinceEpoch.toRadixString(16).toUpperCase(),
@@ -154,6 +192,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
   }
 
   void lock() {
+    sfLog('Session: lock');
     _crypto.lockVault();
     state = const SessionState(statusMessage: 'VAULT SEALED');
   }

@@ -6,6 +6,7 @@ import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'services/vault_provider.dart';
+import 'utils/logger.dart';
 
 class SecureFlowApp extends StatelessWidget {
   const SecureFlowApp({super.key});
@@ -51,9 +52,10 @@ class _AppShellState extends ConsumerState<_AppShell>
   /// Lock vault when app goes to background (§5 Secure Behaviors)
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
+    sfLog('AppShell: lifecycle=$state');
+    if (state == AppLifecycleState.paused) {
       if (_state == _AppState.dashboard) {
+        sfLog('AppShell: background -> lock + login');
         ref.read(sessionProvider.notifier).lock();
         setState(() => _state = _AppState.login);
       }
@@ -66,6 +68,7 @@ class _AppShellState extends ConsumerState<_AppShell>
     ref.listen<SessionState>(sessionProvider, (prev, next) {
       if ((prev?.isUnlocked ?? false) && !next.isUnlocked) {
         if (mounted && _state == _AppState.dashboard) {
+          sfLog('AppShell: session locked -> login');
           setState(() => _state = _AppState.login);
         }
       }
@@ -86,12 +89,18 @@ class _AppShellState extends ConsumerState<_AppShell>
       case _AppState.splash:
         return SplashScreen(
           key: const ValueKey('splash'),
-          onComplete: () => setState(() => _state = _AppState.login),
+          onComplete: () {
+            sfLog('AppShell: splash complete -> login');
+            setState(() => _state = _AppState.login);
+          },
         );
       case _AppState.login:
         return LoginScreen(
           key: const ValueKey('login'),
-          onUnlocked: () => setState(() => _state = _AppState.dashboard),
+          onUnlocked: () {
+            sfLog('AppShell: login unlocked -> dashboard');
+            setState(() => _state = _AppState.dashboard);
+          },
         );
       case _AppState.dashboard:
         return const DashboardScreen(key: ValueKey('dashboard'));
