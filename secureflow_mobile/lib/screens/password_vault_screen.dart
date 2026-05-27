@@ -10,19 +10,30 @@ import '../config/typography.dart';
 import '../config/constants.dart';
 import '../models/credential.dart';
 import '../services/vault_provider.dart';
-import '../widgets/bento_card.dart';
 import '../widgets/tactical_label.dart';
 
 class PasswordVaultScreen extends ConsumerStatefulWidget {
   const PasswordVaultScreen({super.key});
 
   @override
-  ConsumerState<PasswordVaultScreen> createState() => _PasswordVaultScreenState();
+  ConsumerState<PasswordVaultScreen> createState() =>
+      _PasswordVaultScreenState();
 }
 
 class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
   final _searchCtrl = TextEditingController();
   String _query = '';
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Hydrate from local storage every time this screen is shown
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await ref.read(credentialProvider.notifier).load();
+      if (mounted) setState(() => _loading = false);
+    });
+  }
 
   @override
   void dispose() {
@@ -36,7 +47,8 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
       isScrollControlled: true,
       backgroundColor: SFColors.bgCard,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
         side: BorderSide(color: SFColors.borderSoft),
       ),
       builder: (_) => _AddCredentialSheet(
@@ -48,136 +60,212 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
   @override
   Widget build(BuildContext context) {
     final creds = ref.watch(credentialProvider);
-    final filtered = creds.where((c) =>
-      c.website.toLowerCase().contains(_query.toLowerCase()) ||
-      c.username.toLowerCase().contains(_query.toLowerCase())
-    ).toList();
+    final filtered = creds
+        .where((c) =>
+            c.website.toLowerCase().contains(_query.toLowerCase()) ||
+            c.username.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
 
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
+
+      // ── FAB ──────────────────────────────────────────────────────────
       floatingActionButton: GestureDetector(
         onTap: _showAddSheet,
         child: Container(
-          width: 52, height: 52,
+          width: 52,
+          height: 52,
           decoration: BoxDecoration(
             color: SFColors.textMain,
             borderRadius: BorderRadius.circular(SFRadius.pill),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withAlpha(100),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
+                  color: Colors.black.withAlpha(100),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4)),
             ],
           ),
           child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
         ),
       ),
+
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Header ───────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.all(SFSpacing.base),
+              padding: const EdgeInsets.fromLTRB(
+                  SFSpacing.base, SFSpacing.md, SFSpacing.base, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const TacticalLabel('CREDENTIAL ARCHIVE', color: SFColors.textMuted),
+                  const TacticalLabel('CREDENTIAL ARCHIVE',
+                      color: SFColors.textMuted),
                   const SizedBox(height: 6),
-                  Text('PASSWORD VAULT', style: SFTypography.h1),
-                  const SizedBox(height: SFSpacing.md),
-                  TextField(
-                    controller: _searchCtrl,
-                    onChanged: (v) => setState(() => _query = v),
-                    style: SFTypography.body,
-                    decoration: const InputDecoration(
-                      hintText: 'SEARCH CREDENTIALS...',
-                      prefixIcon: Icon(Icons.search, size: 18,
-                          color: SFColors.textFaint),
-                      contentPadding: EdgeInsets.symmetric(
-                          horizontal: SFSpacing.md, vertical: 14),
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                          child: Text('PASSWORD VAULT', style: SFTypography.h1)),
+                      if (!_loading)
+                        TacticalLabel('${creds.length} STORED',
+                            color: SFColors.textFaint),
+                    ],
                   ),
                 ],
               ),
             ),
-            Expanded(
-              child: filtered.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.key_outlined, size: 32,
-                              color: SFColors.textFaint),
-                          const SizedBox(height: SFSpacing.sm),
-                          const TacticalLabel(SFCopy.passwordsEmpty,
-                              color: SFColors.textFaint),
-                          const SizedBox(height: SFSpacing.xl),
-                          GestureDetector(
-                            onTap: _showAddSheet,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: SFColors.borderMedium),
-                                borderRadius: BorderRadius.circular(SFRadius.small),
-                              ),
-                              child: const TacticalLabel('TAP + TO ADD CREDENTIAL',
-                                  color: SFColors.textMuted),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(
-                          SFSpacing.base, 0, SFSpacing.base, 100),
-                      itemCount: filtered.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: SFSpacing.base),
-                      itemBuilder: (_, i) => Dismissible(
-                        key: ValueKey(filtered[i].storeKey),
-                        direction: DismissDirection.endToStart,
-                        background: Container(
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.only(right: 20),
-                          decoration: BoxDecoration(
-                            color: SFColors.dangerMuted,
-                            borderRadius: BorderRadius.circular(SFRadius.bento),
-                          ),
-                          child: const Icon(Icons.delete_outline,
-                              color: SFColors.danger, size: 20),
-                        ),
-                        confirmDismiss: (_) => showDialog<bool>(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            backgroundColor: SFColors.bgCard,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(SFRadius.bento),
-                              side: const BorderSide(color: SFColors.borderSoft),
-                            ),
-                            title: Text('DELETE CREDENTIAL', style: SFTypography.body),
-                            content: Text(
-                              'Remove "${filtered[i].website}" from vault? This cannot be undone.',
-                              style: SFTypography.bodyMuted,
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: Text('CANCEL', style: SFTypography.metadata),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                child: Text('DELETE',
-                                    style: SFTypography.metadata.copyWith(color: SFColors.danger)),
-                              ),
-                            ],
-                          ),
-                        ),
-                        onDismissed: (_) =>
-                            ref.read(credentialProvider.notifier).remove(filtered[i]),
-                        child: _CredentialCard(cred: filtered[i]),
-                      ),
-                    ),
+
+            // ── Search bar ───────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  SFSpacing.base, SFSpacing.md, SFSpacing.base, 0),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: (v) => setState(() => _query = v),
+                style: SFTypography.body,
+                decoration: InputDecoration(
+                  hintText: 'SEARCH CREDENTIALS...',
+                  hintStyle:
+                      SFTypography.body.copyWith(color: SFColors.textFaint),
+                  prefixIcon: const Icon(Icons.search,
+                      size: 18, color: SFColors.textFaint),
+                  filled: true,
+                  fillColor: SFColors.bgCard,
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: SFSpacing.md, vertical: 14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(SFRadius.small),
+                    borderSide: const BorderSide(color: SFColors.borderSoft),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(SFRadius.small),
+                    borderSide: const BorderSide(color: SFColors.borderSoft),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(SFRadius.small),
+                    borderSide:
+                        const BorderSide(color: SFColors.borderMedium),
+                  ),
+                ),
+              ),
             ),
+
+            const SizedBox(height: SFSpacing.md),
+
+            // ── Section label ─────────────────────────────────────────
+            if (!_loading && creds.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                    SFSpacing.base, 0, SFSpacing.base, SFSpacing.sm),
+                child: TacticalLabel(
+                  _query.isEmpty
+                      ? 'ALL CREDENTIALS'
+                      : 'RESULTS FOR "$_query"',
+                  color: SFColors.textFaint,
+                ),
+              ),
+
+            // ── Body ─────────────────────────────────────────────────
+            Expanded(
+              child: _loading
+                  ? _LoadingSkeleton()
+                  : filtered.isEmpty
+                      ? _EmptyState(onAdd: _showAddSheet, hasQuery: _query.isNotEmpty)
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(
+                              SFSpacing.base, 0, SFSpacing.base, 110),
+                          itemCount: filtered.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: SFSpacing.sm),
+                          itemBuilder: (_, i) => _CredentialCard(
+                            cred: filtered[i],
+                            onDelete: () => ref
+                                .read(credentialProvider.notifier)
+                                .remove(filtered[i]),
+                          ),
+                        ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Loading skeleton ─────────────────────────────────────────────────────────
+
+class _LoadingSkeleton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: SFSpacing.base),
+      child: Column(
+        children: List.generate(
+          4,
+          (_) => Padding(
+            padding: const EdgeInsets.only(bottom: SFSpacing.sm),
+            child: Container(
+              height: 64,
+              decoration: BoxDecoration(
+                color: SFColors.bgCard,
+                borderRadius: BorderRadius.circular(SFRadius.card),
+                border: Border.all(color: SFColors.borderSoft),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Empty state ──────────────────────────────────────────────────────────────
+
+class _EmptyState extends StatelessWidget {
+  final VoidCallback onAdd;
+  final bool hasQuery;
+  const _EmptyState({required this.onAdd, required this.hasQuery});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: SFSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.key_outlined, size: 36, color: SFColors.textFaint),
+            const SizedBox(height: SFSpacing.md),
+            Text(
+              hasQuery ? 'NO MATCHES FOUND' : SFCopy.passwordsEmpty,
+              style: SFTypography.body.copyWith(
+                  color: SFColors.textFaint, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+            if (!hasQuery) ...[
+              const SizedBox(height: SFSpacing.xl),
+              GestureDetector(
+                onTap: onAdd,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: SFColors.borderMedium),
+                    borderRadius: BorderRadius.circular(SFRadius.small),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.add, size: 14, color: SFColors.textMuted),
+                      const SizedBox(width: 6),
+                      Text('ADD FIRST CREDENTIAL',
+                          style: SFTypography.metadata.copyWith(
+                              color: SFColors.textMuted)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -189,7 +277,8 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
 
 class _CredentialCard extends StatefulWidget {
   final Credential cred;
-  const _CredentialCard({required this.cred});
+  final VoidCallback onDelete;
+  const _CredentialCard({required this.cred, required this.onDelete});
 
   @override
   State<_CredentialCard> createState() => _CredentialCardState();
@@ -216,14 +305,14 @@ class _CredentialCardState extends State<_CredentialCard> {
     });
   }
 
-  void _copyPassword() {
+  void _copyPassword(BuildContext ctx) {
     Clipboard.setData(ClipboardData(text: widget.cred.password));
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(ctx).showSnackBar(
       SnackBar(
         backgroundColor: SFColors.bgCard,
         duration: const Duration(seconds: 5),
         content: Row(children: [
-          const Icon(Icons.content_copy, size: 14, color: SFColors.textMuted),
+          const Icon(Icons.content_copy, size: 13, color: SFColors.textMuted),
           const SizedBox(width: 8),
           Text(SFCopy.copying, style: SFTypography.metadata),
         ]),
@@ -235,6 +324,36 @@ class _CredentialCardState extends State<_CredentialCard> {
     });
   }
 
+  Future<void> _confirmDelete(BuildContext ctx) async {
+    final ok = await showDialog<bool>(
+      context: ctx,
+      builder: (_) => AlertDialog(
+        backgroundColor: SFColors.bgCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(SFRadius.bento),
+          side: const BorderSide(color: SFColors.borderSoft),
+        ),
+        title: Text('DELETE CREDENTIAL', style: SFTypography.body),
+        content: Text(
+          'Remove "${widget.cred.website}"? This cannot be undone.',
+          style: SFTypography.bodyMuted,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('CANCEL', style: SFTypography.metadata),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('DELETE',
+                style: SFTypography.metadata.copyWith(color: SFColors.danger)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) widget.onDelete();
+  }
+
   @override
   void dispose() {
     _holdTimer?.cancel();
@@ -244,66 +363,144 @@ class _CredentialCardState extends State<_CredentialCard> {
 
   @override
   Widget build(BuildContext context) {
-    return BentoCard(
-      child: Row(
-        children: [
-          Container(
-            width: 36, height: 36,
-            decoration: BoxDecoration(
-              color: SFColors.borderSoft,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Center(
-              child: Text(
-                widget.cred.website.isNotEmpty
-                    ? widget.cred.website[0].toUpperCase()
-                    : '?',
-                style: SFTypography.body.copyWith(color: SFColors.textMuted),
+    // First letter avatar colour — always monochrome
+    final initials = widget.cred.website.isNotEmpty
+        ? widget.cred.website[0].toUpperCase()
+        : '?';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: SFColors.bgCard,
+        borderRadius: BorderRadius.circular(SFRadius.card),
+        border: Border.all(color: SFColors.borderSoft),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          children: [
+            // ── Left accent bar ───────────────────────────────────────
+            Container(
+              width: 3,
+              decoration: const BoxDecoration(
+                color: SFColors.borderMedium,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(SFRadius.card),
+                  bottomLeft: Radius.circular(SFRadius.card),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: SFSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(widget.cred.website, style: SFTypography.body),
-                Text(widget.cred.username,
-                    style: SFTypography.bodyMuted.copyWith(fontSize: 11)),
-              ],
-            ),
-          ),
-          GestureDetector(
-            onLongPressStart: _onLongPressStart,
-            onLongPressEnd: _onLongPressEnd,
-            onTap: _copyPassword,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: _holding
-                    ? SFColors.borderMedium
-                    : SFColors.borderSoft,
-                borderRadius: BorderRadius.circular(SFRadius.small),
+
+            // ── Avatar ────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: SFSpacing.md),
+              child: Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: SFColors.bgPrimary,
+                  borderRadius: BorderRadius.circular(SFRadius.small),
+                  border: Border.all(color: SFColors.borderSoft),
+                ),
+                child: Center(
+                  child: Text(
+                    initials,
+                    style: SFTypography.cardTitle.copyWith(
+                        fontSize: 16, color: SFColors.textMuted),
+                  ),
+                ),
               ),
-              child: _revealed
-                  ? Text(widget.cred.password,
-                      style: SFTypography.terminal.copyWith(fontSize: 11))
-                  : Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.fingerprint, size: 14,
-                          color: SFColors.textFaint),
-                      const SizedBox(width: 4),
-                      Text('HOLD', style: SFTypography.metadata.copyWith(fontSize: 9)),
-                    ]),
             ),
-          ),
-        ],
+
+            // ── Site + Username ───────────────────────────────────────
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: SFSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      widget.cred.website,
+                      style: SFTypography.body,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.cred.username,
+                      style: SFTypography.terminal.copyWith(fontSize: 10),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (widget.cred.notes.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.cred.notes,
+                        style: SFTypography.bodyMuted.copyWith(fontSize: 10),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+            // ── Actions column ────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.all(SFSpacing.sm),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  // Copy / reveal button
+                  GestureDetector(
+                    onLongPressStart: _onLongPressStart,
+                    onLongPressEnd: _onLongPressEnd,
+                    onTap: () => _copyPassword(context),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: _holding
+                            ? SFColors.borderMedium
+                            : SFColors.bgPrimary,
+                        borderRadius: BorderRadius.circular(SFRadius.small),
+                        border: Border.all(color: SFColors.borderSoft),
+                      ),
+                      child: _revealed
+                          ? Text(widget.cred.password,
+                              style: SFTypography.terminal.copyWith(fontSize: 10))
+                          : Row(mainAxisSize: MainAxisSize.min, children: [
+                              const Icon(Icons.fingerprint,
+                                  size: 13, color: SFColors.textFaint),
+                              const SizedBox(width: 3),
+                              Text('HOLD',
+                                  style: SFTypography.metadata.copyWith(fontSize: 8)),
+                            ]),
+                    ),
+                  ),
+                  const SizedBox(height: SFSpacing.xs),
+                  // Delete
+                  GestureDetector(
+                    onTap: () => _confirmDelete(context),
+                    child: Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: SFColors.bgPrimary,
+                        borderRadius: BorderRadius.circular(SFRadius.small),
+                        border: Border.all(color: SFColors.borderSoft),
+                      ),
+                      child: const Icon(Icons.delete_outline,
+                          size: 13, color: SFColors.textFaint),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-// ─── Add Credential Sheet ────────────────────────────────────────────────────
+// ─── Add Credential Sheet ─────────────────────────────────────────────────────
 
 class _AddCredentialSheet extends StatefulWidget {
   final void Function(Credential) onAdd;
@@ -314,12 +511,13 @@ class _AddCredentialSheet extends StatefulWidget {
 }
 
 class _AddCredentialSheetState extends State<_AddCredentialSheet> {
-  final _formKey    = GlobalKey<FormState>();
-  final _siteCtrl   = TextEditingController();
-  final _userCtrl   = TextEditingController();
-  final _passCtrl   = TextEditingController();
-  final _notesCtrl  = TextEditingController();
+  final _formKey   = GlobalKey<FormState>();
+  final _siteCtrl  = TextEditingController();
+  final _userCtrl  = TextEditingController();
+  final _passCtrl  = TextEditingController();
+  final _notesCtrl = TextEditingController();
   bool _passVisible = false;
+  bool _saving = false;
 
   @override
   void dispose() {
@@ -330,22 +528,26 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
     final cred = Credential(
-      website: _siteCtrl.text.trim(),
+      website:  _siteCtrl.text.trim(),
       username: _userCtrl.text.trim(),
       password: _passCtrl.text,
-      notes: _notesCtrl.text.trim(),
+      notes:    _notesCtrl.text.trim(),
     );
     widget.onAdd(cred);
-    Navigator.pop(context);
+    // Give the notifier a frame to persist before closing
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (mounted) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(SFSpacing.xl),
@@ -355,95 +557,179 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Header
-                Row(
-                  children: [
-                    const TacticalLabel('NEW CREDENTIAL', color: SFColors.textMuted),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      child: const Icon(Icons.close, size: 18, color: SFColors.textFaint),
+                // ── Sheet header ─────────────────────────────────────
+                Row(children: [
+                  const TacticalLabel('NEW CREDENTIAL', color: SFColors.textMuted),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      child: const Icon(Icons.close,
+                          size: 18, color: SFColors.textFaint),
                     ),
-                  ],
-                ),
-                const SizedBox(height: SFSpacing.xl),
-
-                // Website/Service
-                TextFormField(
-                  controller: _siteCtrl,
-                  style: SFTypography.body,
-                  decoration: const InputDecoration(
-                    labelText: 'WEBSITE / SERVICE',
-                    prefixIcon: Icon(Icons.language, size: 16, color: SFColors.textFaint),
-                    contentPadding: EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
                   ),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                ]),
+                const SizedBox(height: SFSpacing.lg),
+
+                // ── Fields ───────────────────────────────────────────
+                _SheetField(
+                  ctrl: _siteCtrl,
+                  label: 'WEBSITE / SERVICE',
+                  icon: Icons.language_outlined,
+                  validator: (v) =>
+                      (v == null || v.isEmpty) ? 'Required' : null,
                 ),
                 const SizedBox(height: SFSpacing.md),
 
-                // Username
-                TextFormField(
-                  controller: _userCtrl,
-                  style: SFTypography.body,
-                  decoration: const InputDecoration(
-                    labelText: 'USERNAME / EMAIL',
-                    prefixIcon: Icon(Icons.person_outline, size: 16, color: SFColors.textFaint),
-                    contentPadding: EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
-                  ),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                _SheetField(
+                  ctrl: _userCtrl,
+                  label: 'USERNAME / EMAIL',
+                  icon: Icons.person_outline,
+                  validator: (v) =>
+                      (v == null || v.isEmpty) ? 'Required' : null,
                 ),
                 const SizedBox(height: SFSpacing.md),
 
-                // Password
+                // Password with visibility toggle
                 TextFormField(
                   controller: _passCtrl,
                   obscureText: !_passVisible,
-                  style: SFTypography.terminal.copyWith(fontSize: 14),
+                  style: SFTypography.terminal.copyWith(
+                      fontSize: 14, color: SFColors.textMain),
+                  validator: (v) =>
+                      (v == null || v.isEmpty) ? 'Required' : null,
                   decoration: InputDecoration(
                     labelText: 'PASSWORD',
-                    prefixIcon: const Icon(Icons.lock_outline, size: 16, color: SFColors.textFaint),
+                    labelStyle: SFTypography.metadata
+                        .copyWith(color: SFColors.textFaint),
+                    prefixIcon: const Icon(Icons.lock_outline,
+                        size: 16, color: SFColors.textFaint),
                     suffixIcon: GestureDetector(
-                      onTap: () => setState(() => _passVisible = !_passVisible),
+                      onTap: () =>
+                          setState(() => _passVisible = !_passVisible),
                       child: Icon(
-                        _passVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                        size: 16, color: SFColors.textFaint,
+                        _passVisible
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        size: 16,
+                        color: SFColors.textFaint,
                       ),
                     ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
+                    filled: true,
+                    fillColor: SFColors.bgPrimary,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: SFSpacing.md, vertical: 14),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      borderSide: const BorderSide(color: SFColors.borderSoft),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      borderSide: const BorderSide(color: SFColors.borderSoft),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      borderSide: const BorderSide(color: SFColors.borderMedium),
+                    ),
+                    errorBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      borderSide: const BorderSide(color: SFColors.danger),
+                    ),
                   ),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
                 ),
                 const SizedBox(height: SFSpacing.md),
 
-                // Notes
-                TextFormField(
-                  controller: _notesCtrl,
-                  style: SFTypography.body,
+                _SheetField(
+                  ctrl: _notesCtrl,
+                  label: 'NOTES (optional)',
+                  icon: Icons.notes_outlined,
                   maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'NOTES (optional)',
-                    prefixIcon: Icon(Icons.notes, size: 16, color: SFColors.textFaint),
-                    contentPadding: EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
-                  ),
                 ),
                 const SizedBox(height: SFSpacing.xl),
 
-                ElevatedButton(
-                  onPressed: _save,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: SFColors.textMain,
-                    foregroundColor: SFColors.bgPrimary,
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(SFRadius.small),
+                // ── Save button ──────────────────────────────────────
+                GestureDetector(
+                  onTap: _saving ? null : _save,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: _saving
+                          ? SFColors.borderMedium
+                          : SFColors.textMain,
+                      borderRadius:
+                          BorderRadius.circular(SFRadius.small),
+                    ),
+                    child: Center(
+                      child: _saving
+                          ? const SizedBox(
+                              width: 18, height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: SFColors.textFaint))
+                          : Text('SAVE TO VAULT',
+                              style: SFTypography.button.copyWith(
+                                  color: SFColors.bgPrimary)),
                     ),
                   ),
-                  child: Text('SAVE TO VAULT', style: SFTypography.button),
                 ),
                 const SizedBox(height: SFSpacing.base),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SheetField extends StatelessWidget {
+  final TextEditingController ctrl;
+  final String label;
+  final IconData icon;
+  final String? Function(String?)? validator;
+  final int maxLines;
+
+  const _SheetField({
+    required this.ctrl,
+    required this.label,
+    required this.icon,
+    this.validator,
+    this.maxLines = 1,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: ctrl,
+      validator: validator,
+      maxLines: maxLines,
+      style: SFTypography.body,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle:
+            SFTypography.metadata.copyWith(color: SFColors.textFaint),
+        prefixIcon: Icon(icon, size: 16, color: SFColors.textFaint),
+        filled: true,
+        fillColor: SFColors.bgPrimary,
+        contentPadding: const EdgeInsets.symmetric(
+            horizontal: SFSpacing.md, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(SFRadius.small),
+          borderSide: const BorderSide(color: SFColors.borderSoft),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(SFRadius.small),
+          borderSide: const BorderSide(color: SFColors.borderSoft),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(SFRadius.small),
+          borderSide: const BorderSide(color: SFColors.borderMedium),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(SFRadius.small),
+          borderSide: const BorderSide(color: SFColors.danger),
         ),
       ),
     );

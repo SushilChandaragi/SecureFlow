@@ -1,15 +1,12 @@
-/// Dashboard Screen — Bento grid main view (§2)
+/// Dashboard Screen — secure home view, vertical layout (§2)
 library;
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import '../config/colors.dart';
 import '../config/typography.dart';
-import '../config/constants.dart';
 import '../services/vault_provider.dart';
-import '../widgets/bento_card.dart';
 import '../widgets/tactical_label.dart';
 import '../widgets/sf_badge.dart';
 import '../widgets/nav_pill.dart';
@@ -32,7 +29,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    // Load vault data after unlock
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(credentialProvider.notifier).load();
       ref.read(totpProvider.notifier).load();
@@ -59,7 +55,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       body: Stack(
         children: [
           SafeArea(child: _buildCurrentScreen()),
-          // Floating nav pill (§9)
           Positioned(
             bottom: 24,
             left: 0,
@@ -90,7 +85,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 }
 
-// ─── Vault Home bento grid ───────────────────────────────────────────────────
+// ─── Vault Home — clean vertical layout, no bento grid ───────────────────────
 
 class _VaultHome extends ConsumerWidget {
   final String sessionTime;
@@ -98,238 +93,322 @@ class _VaultHome extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final files = ref.watch(vaultFilesProvider);
-    final creds = ref.watch(credentialProvider);
-    final totps = ref.watch(totpProvider);
+    final files   = ref.watch(vaultFilesProvider);
+    final creds   = ref.watch(credentialProvider);
+    final totps   = ref.watch(totpProvider);
     final session = ref.watch(sessionProvider);
 
-    return CustomScrollView(
-      slivers: [
-        // ── Top bar ─────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(SFSpacing.base, SFSpacing.md,
-                SFSpacing.base, 0),
-            child: Row(
-              children: [
-                // Profile glyph
-                Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                    color: SFColors.bgCard,
-                    borderRadius: BorderRadius.circular(SFRadius.small),
-                    border: Border.all(color: SFColors.borderSoft),
-                  ),
-                  child: const Center(
-                    child: Text('SF',
-                        style: TextStyle(color: SFColors.textMuted,
-                            fontSize: 12, letterSpacing: 2)),
-                  ),
-                ),
-                const SizedBox(width: SFSpacing.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const TacticalLabel('ENCLAVE ACTIVE', color: SFColors.success),
-                      Text(sessionTime,
-                          style: SFTypography.terminal.copyWith(fontSize: 10)),
-                    ],
-                  ),
-                ),
-                const SFBadge('RAM-ONLY', color: SFColors.success,
-                    background: SFColors.successMuted),
-              ],
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(
+          SFSpacing.base, SFSpacing.md, SFSpacing.base, 110),
+      children: [
+
+        // ── Top status bar ────────────────────────────────────────────
+        Row(
+          children: [
+            _GlyphBox(),
+            const SizedBox(width: SFSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const TacticalLabel('ENCLAVE ACTIVE', color: SFColors.success),
+                  Text(sessionTime,
+                      style: SFTypography.terminal.copyWith(fontSize: 10)),
+                ],
+              ),
             ),
-          ),
+            const SFBadge('RAM-ONLY',
+                color: SFColors.success, background: SFColors.successMuted),
+          ],
         ),
 
-        // ── Bento grid ──────────────────────────────────────────────
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(SFSpacing.base, SFSpacing.md,
-              SFSpacing.base, 100),
-          sliver: SliverMasonryGrid.count(
-            crossAxisCount: 2,
-            mainAxisSpacing: SFSpacing.base,
-            crossAxisSpacing: SFSpacing.base,
-            childCount: 5,
-            itemBuilder: (context, index) {
-              switch (index) {
-                // Full-width vault card
-                case 0:
-                  return _FullWidthVaultCard(files: files);
-                // Password vault card
-                case 1:
-                  return _SmallCard(
-                    title: 'PASSWORD VAULT',
-                    value: '${creds.length}',
-                    subtitle: 'CREDENTIALS',
-                    icon: Icons.key_outlined,
-                    onTap: () {},
-                  );
-                // Authenticator card
-                case 2:
-                  return _SmallCard(
-                    title: 'AUTHENTICATOR',
-                    value: '${totps.length}',
-                    subtitle: 'TOTP KEYS',
-                    icon: Icons.shield_outlined,
-                    onTap: () {},
-                  );
-                // Auth method card
-                case 3:
-                  return _SmallCard(
-                    title: 'AUTH METHOD',
-                    value: session.profile?.authMethodLabel ?? '—',
-                    subtitle: 'HARDWARE KEY',
-                    icon: Icons.nfc,
-                    onTap: () {},
-                  );
-                // Analytics card
-                case 4:
-                  return _AnalyticsPreviewCard();
-                default:
-                  return const SizedBox.shrink();
-              }
-            },
-          ),
+        const SizedBox(height: SFSpacing.xl),
+
+        // ── Section: HEADLINE ─────────────────────────────────────────
+        Text('SECUREFLOW', style: SFTypography.h1),
+        const SizedBox(height: 4),
+        Text(
+          'Zero-knowledge enclave · Hardware-tethered',
+          style: SFTypography.terminal.copyWith(fontSize: 11),
+        ),
+
+        const SizedBox(height: SFSpacing.xl),
+        _Divider(),
+
+        // ── Stats row ─────────────────────────────────────────────────
+        const SizedBox(height: SFSpacing.lg),
+        Row(
+          children: [
+            Expanded(
+              child: _StatTile(
+                label: 'CREDENTIALS',
+                value: '${creds.length}',
+                icon: Icons.key_outlined,
+              ),
+            ),
+            _VerticalDivider(),
+            Expanded(
+              child: _StatTile(
+                label: 'TOTP KEYS',
+                value: '${totps.length}',
+                icon: Icons.shield_outlined,
+              ),
+            ),
+            _VerticalDivider(),
+            Expanded(
+              child: files.when(
+                data: (list) => _StatTile(
+                  label: 'VAULT FILES',
+                  value: '${list.length}',
+                  icon: Icons.lock_outline,
+                ),
+                loading: () => const _StatTile(
+                  label: 'VAULT FILES',
+                  value: '—',
+                  icon: Icons.lock_outline,
+                ),
+                error: (_, __) => const _StatTile(
+                  label: 'VAULT FILES',
+                  value: 'ERR',
+                  icon: Icons.lock_outline,
+                ),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: SFSpacing.lg),
+        _Divider(),
+        const SizedBox(height: SFSpacing.xl),
+
+        // ── Section: AUTH METHOD ──────────────────────────────────────
+        const _SectionHeader('AUTHENTICATION'),
+        const SizedBox(height: SFSpacing.md),
+        _InfoRow(
+          label: 'METHOD',
+          value: session.profile?.authMethodLabel ?? '—',
+          icon: Icons.fingerprint,
+        ),
+        const SizedBox(height: SFSpacing.sm),
+        _InfoRow(
+          label: 'SESSION ID',
+          value: session.profile?.sessionId ?? '—',
+          icon: Icons.tag,
+          mono: true,
+        ),
+
+        const SizedBox(height: SFSpacing.xl),
+        _Divider(),
+        const SizedBox(height: SFSpacing.xl),
+
+        // ── Section: CLOUD VAULT ──────────────────────────────────────
+        const _SectionHeader('CLOUD VAULT'),
+        const SizedBox(height: SFSpacing.md),
+        _CloudStatusCard(files: files),
+
+        const SizedBox(height: SFSpacing.xl),
+        _Divider(),
+        const SizedBox(height: SFSpacing.xl),
+
+        // ── Section: SECURITY STATUS ──────────────────────────────────
+        const _SectionHeader('SECURITY STATUS'),
+        const SizedBox(height: SFSpacing.md),
+        _SecurityStatusList(),
+
+        const SizedBox(height: SFSpacing.xl),
+      ],
+    );
+  }
+}
+
+// ─── Sub-widgets ─────────────────────────────────────────────────────────────
+
+class _GlyphBox extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 36, height: 36,
+      decoration: BoxDecoration(
+        color: SFColors.bgCard,
+        borderRadius: BorderRadius.circular(SFRadius.small),
+        border: Border.all(color: SFColors.borderSoft),
+      ),
+      child: const Center(
+        child: Text('SF',
+            style: TextStyle(
+                color: SFColors.textMuted, fontSize: 11, letterSpacing: 2)),
+      ),
+    );
+  }
+}
+
+class _Divider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(height: 1, color: SFColors.borderSoft);
+  }
+}
+
+class _VerticalDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1, height: 56, color: SFColors.borderSoft,
+      margin: const EdgeInsets.symmetric(horizontal: SFSpacing.xs),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String text;
+  const _SectionHeader(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return TacticalLabel(text, color: SFColors.textFaint);
+  }
+}
+
+class _StatTile extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _StatTile({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(icon, size: 16, color: SFColors.textFaint),
+        const SizedBox(height: 8),
+        Text(value,
+            style: SFTypography.dataValue.copyWith(fontSize: 28),
+            textAlign: TextAlign.center),
+        const SizedBox(height: 4),
+        TacticalLabel(label, color: SFColors.textFaint),
+      ],
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool mono;
+
+  const _InfoRow({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.mono = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: SFColors.textFaint),
+        const SizedBox(width: SFSpacing.sm),
+        TacticalLabel(label, color: SFColors.textFaint),
+        const Spacer(),
+        Text(
+          value,
+          style: mono
+              ? SFTypography.terminal.copyWith(fontSize: 11)
+              : SFTypography.body.copyWith(fontSize: 13),
+          overflow: TextOverflow.ellipsis,
         ),
       ],
     );
   }
 }
 
-class _FullWidthVaultCard extends StatelessWidget {
+class _CloudStatusCard extends StatelessWidget {
   final AsyncValue<List<dynamic>> files;
-  const _FullWidthVaultCard({required this.files});
+  const _CloudStatusCard({required this.files});
 
   @override
   Widget build(BuildContext context) {
-    // Span full width via layout
-    return LayoutBuilder(builder: (context, constraints) {
-      // The staggered grid gives us the column width; we span 2 columns
-      return BentoCard(
-        elevated: true,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(children: [
-              Icon(Icons.lock_outline, size: 16, color: SFColors.textMuted),
-              SizedBox(width: 8),
-              Flexible(child: TacticalLabel('CLOUD VAULT', color: SFColors.textMuted)),
-              Spacer(),
-              Flexible(child: SFBadge('AES-256')),
-            ]),
-            const SizedBox(height: SFSpacing.md),
-            files.when(
-              data: (list) => Text('${list.length}',
-                  style: SFTypography.dataValue.copyWith(fontSize: 40)),
-              loading: () => const SizedBox(height: 40, width: 40,
-                  child: CircularProgressIndicator(strokeWidth: 1,
-                      color: SFColors.textMuted)),
-              error: (_, __) => Text('—', style: SFTypography.dataValue),
-            ),
-            Text('ENCRYPTED ASSETS', style: SFTypography.metadata),
-            const SizedBox(height: SFSpacing.md),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: SFColors.textMain.withAlpha(15),
-                borderRadius: BorderRadius.circular(SFRadius.small),
-                border: Border.all(color: SFColors.borderMedium),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.upload_outlined, size: 14, color: SFColors.textMain),
-                const SizedBox(width: 6),
-                Text(SFCopy.secureUpload, style: SFTypography.button.copyWith(fontSize: 11)),
-              ]),
-            ),
-          ],
-        ),
-      );
-    });
-  }
-}
-
-class _SmallCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final String subtitle;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _SmallCard({
-    required this.title, required this.value,
-    required this.subtitle, required this.icon, required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return BentoCard(
-      onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(icon, size: 14, color: SFColors.textMuted),
-            const SizedBox(width: 6),
-            Expanded(child: TacticalLabel(title, color: SFColors.textMuted)),
-          ]),
-          const SizedBox(height: SFSpacing.md),
-          Text(value, style: SFTypography.dataValue),
-          const SizedBox(height: 2),
-          Text(subtitle, style: SFTypography.metadata),
-        ],
+    return Container(
+      padding: const EdgeInsets.all(SFSpacing.md),
+      decoration: BoxDecoration(
+        color: SFColors.bgCard,
+        borderRadius: BorderRadius.circular(SFRadius.card),
+        border: Border.all(color: SFColors.borderSoft),
       ),
-    );
-  }
-}
-
-class _AnalyticsPreviewCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return BentoCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          const TacticalLabel(SFCopy.threatIntel, color: SFColors.textMuted),
-          const SizedBox(height: SFSpacing.md),
-          // Mini monochrome line graph
-          SizedBox(
-            height: 40,
-            child: CustomPaint(painter: _MiniGraphPainter()),
+          const Icon(Icons.lock_outline, size: 20, color: SFColors.textMuted),
+          const SizedBox(width: SFSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('GHOST WAREHOUSE', style: SFTypography.body.copyWith(fontSize: 13)),
+                const SizedBox(height: 2),
+                files.when(
+                  data: (list) => Text(
+                    list.isEmpty ? 'No assets stored' : '${list.length} encrypted asset(s)',
+                    style: SFTypography.bodyMuted.copyWith(fontSize: 11),
+                  ),
+                  loading: () => Text('Connecting...', style: SFTypography.bodyMuted.copyWith(fontSize: 11)),
+                  error: (_, __) => Text('Offline mode',
+                      style: SFTypography.bodyMuted.copyWith(fontSize: 11, color: SFColors.textFaint)),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: SFSpacing.sm),
-          Row(children: [
-            const Icon(Icons.check_circle_outline, size: 12, color: SFColors.success),
-            const SizedBox(width: 4),
-            Text('NO THREATS DETECTED', style: SFTypography.metadata.copyWith(fontSize: 9)),
-          ]),
+          const SFBadge('AES-256'),
         ],
       ),
     );
   }
 }
 
-class _MiniGraphPainter extends CustomPainter {
-  static const _points = [0.5, 0.4, 0.6, 0.3, 0.5, 0.4, 0.35, 0.45, 0.3];
+class _SecurityStatusList extends StatelessWidget {
+  static const _items = [
+    (Icons.memory_outlined,      'RAM-ONLY OPERATION',   'No sensitive data on disk'),
+    (Icons.enhanced_encryption,  'AES-256-GCM ACTIVE',   'Hardware-grade encryption'),
+    (Icons.fingerprint,          'BIOMETRIC BOUND',       'Fingerprint authentication'),
+    (Icons.nfc,                  'NFC HARDWARE KEY',      'Physical token required'),
+    (Icons.timer_outlined,       'AUTO-LOCK ENABLED',     '5-minute inactivity timeout'),
+  ];
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = SFColors.textFaint
-      ..strokeWidth = 1.0
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    for (int i = 0; i < _points.length; i++) {
-      final x = i / (_points.length - 1) * size.width;
-      final y = _points[i] * size.height;
-      i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
-    }
-    canvas.drawPath(path, paint);
+  Widget build(BuildContext context) {
+    return Column(
+      children: List.generate(_items.length, (i) {
+        final item = _items[i];
+        return Padding(
+          padding: EdgeInsets.only(bottom: i < _items.length - 1 ? SFSpacing.sm : 0),
+          child: Row(
+            children: [
+              Icon(item.$1, size: 14, color: SFColors.textFaint),
+              const SizedBox(width: SFSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.$2, style: SFTypography.body.copyWith(fontSize: 12)),
+                    Text(item.$3,
+                        style: SFTypography.bodyMuted.copyWith(fontSize: 10)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.check_circle_outline,
+                  size: 14, color: SFColors.success),
+            ],
+          ),
+        );
+      }),
+    );
   }
-
-  @override
-  bool shouldRepaint(_) => false;
 }
