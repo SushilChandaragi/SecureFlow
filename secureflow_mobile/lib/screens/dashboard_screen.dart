@@ -216,9 +216,9 @@ class _FullWidthVaultCard extends StatelessWidget {
             const Row(children: [
               Icon(Icons.lock_outline, size: 16, color: SFColors.textMuted),
               SizedBox(width: 8),
-              TacticalLabel('CLOUD VAULT', color: SFColors.textMuted),
+              Flexible(child: TacticalLabel('CLOUD VAULT', color: SFColors.textMuted)),
               Spacer(),
-              SFBadge('AES-256-GCM'),
+              Flexible(child: SFBadge('AES-256')),
             ]),
             const SizedBox(height: SFSpacing.md),
             files.when(

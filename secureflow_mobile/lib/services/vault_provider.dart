@@ -227,19 +227,33 @@ final vaultFilesProvider = FutureProvider<List<VaultFile>>((ref) async {
 class CredentialNotifier extends StateNotifier<List<Credential>> {
   final CryptoService _crypto;
   final CloudService? _cloud;
+  final SecureStorageService _storage;
 
-  CredentialNotifier(this._crypto, this._cloud) : super([]);
+  CredentialNotifier(this._crypto, this._cloud, this._storage) : super([]);
 
   static const _filename = 'passwords.enc';
 
   Future<void> load() async {
-    if (!_crypto.isUnlocked || _cloud == null) return;
+    // 1. Try cloud first
+    if (_crypto.isUnlocked && _cloud != null) {
+      try {
+        final blob = await _cloud!.downloadToBuffer(_filename);
+        final json = utf8.decode(_crypto.decryptBlob(blob));
+        final data = jsonDecode(json);
+        if (data is List) {
+          state = data.map((e) => Credential.fromJson(e as Map<String, dynamic>)).toList();
+          return;
+        }
+      } catch (_) {}
+    }
+    // 2. Fall back to local secure storage
     try {
-      final blob = await _cloud!.downloadToBuffer(_filename);
-      final json = utf8.decode(_crypto.decryptBlob(blob));
-      final data = jsonDecode(json);
-      if (data is List) {
-        state = data.map((e) => Credential.fromJson(e as Map<String, dynamic>)).toList();
+      final json = await _storage.loadPasswordStoreJson();
+      if (json != null && json.isNotEmpty) {
+        final data = jsonDecode(json);
+        if (data is List) {
+          state = data.map((e) => Credential.fromJson(e as Map<String, dynamic>)).toList();
+        }
       }
     } catch (_) {
       state = [];
@@ -257,10 +271,16 @@ class CredentialNotifier extends StateNotifier<List<Credential>> {
   }
 
   Future<void> _persist() async {
-    if (!_crypto.isUnlocked || _cloud == null) return;
     final json = jsonEncode(state.map((c) => c.toJson()).toList());
-    final blob = _crypto.encryptToBlob(Uint8List.fromList(utf8.encode(json)));
-    await _cloud!.uploadVaultFile(blob, _filename);
+    // Always save locally
+    await _storage.savePasswordStoreJson(json);
+    // Also upload to cloud if available
+    if (_crypto.isUnlocked && _cloud != null) {
+      try {
+        final blob = _crypto.encryptToBlob(Uint8List.fromList(utf8.encode(json)));
+        await _cloud!.uploadVaultFile(blob, _filename);
+      } catch (_) {}
+    }
   }
 }
 
@@ -268,7 +288,8 @@ final credentialProvider = StateNotifierProvider<CredentialNotifier, List<Creden
   final crypto = ref.watch(cryptoServiceProvider);
   final cloudAsync = ref.watch(cloudServiceProvider);
   final cloud = cloudAsync.valueOrNull;
-  return CredentialNotifier(crypto, cloud);
+  final storage = ref.watch(storageServiceProvider);
+  return CredentialNotifier(crypto, cloud, storage);
 });
 
 // ─── TOTP Keys ───────────────────────────────────────────────────────────────
@@ -276,19 +297,33 @@ final credentialProvider = StateNotifierProvider<CredentialNotifier, List<Creden
 class TotpNotifier extends StateNotifier<List<TotpKey>> {
   final CryptoService _crypto;
   final CloudService? _cloud;
+  final SecureStorageService _storage;
 
-  TotpNotifier(this._crypto, this._cloud) : super([]);
+  TotpNotifier(this._crypto, this._cloud, this._storage) : super([]);
 
   static const _filename = 'auth_keys.enc';
 
   Future<void> load() async {
-    if (!_crypto.isUnlocked || _cloud == null) return;
+    // 1. Try cloud first
+    if (_crypto.isUnlocked && _cloud != null) {
+      try {
+        final blob = await _cloud!.downloadToBuffer(_filename);
+        final json = utf8.decode(_crypto.decryptBlob(blob));
+        final data = jsonDecode(json);
+        if (data is List) {
+          state = data.map((e) => TotpKey.fromJson(e as Map<String, dynamic>)).toList();
+          return;
+        }
+      } catch (_) {}
+    }
+    // 2. Fall back to local secure storage
     try {
-      final blob = await _cloud!.downloadToBuffer(_filename);
-      final json = utf8.decode(_crypto.decryptBlob(blob));
-      final data = jsonDecode(json);
-      if (data is List) {
-        state = data.map((e) => TotpKey.fromJson(e as Map<String, dynamic>)).toList();
+      final json = await _storage.loadTotpStoreJson();
+      if (json != null && json.isNotEmpty) {
+        final data = jsonDecode(json);
+        if (data is List) {
+          state = data.map((e) => TotpKey.fromJson(e as Map<String, dynamic>)).toList();
+        }
       }
     } catch (_) {
       state = [];
@@ -306,10 +341,16 @@ class TotpNotifier extends StateNotifier<List<TotpKey>> {
   }
 
   Future<void> _persist() async {
-    if (!_crypto.isUnlocked || _cloud == null) return;
     final json = jsonEncode(state.map((k) => k.toJson()).toList());
-    final blob = _crypto.encryptToBlob(Uint8List.fromList(utf8.encode(json)));
-    await _cloud!.uploadVaultFile(blob, _filename);
+    // Always save locally
+    await _storage.saveTotpStoreJson(json);
+    // Also upload to cloud if available
+    if (_crypto.isUnlocked && _cloud != null) {
+      try {
+        final blob = _crypto.encryptToBlob(Uint8List.fromList(utf8.encode(json)));
+        await _cloud!.uploadVaultFile(blob, _filename);
+      } catch (_) {}
+    }
   }
 }
 
@@ -317,5 +358,6 @@ final totpProvider = StateNotifierProvider<TotpNotifier, List<TotpKey>>((ref) {
   final crypto = ref.watch(cryptoServiceProvider);
   final cloudAsync = ref.watch(cloudServiceProvider);
   final cloud = cloudAsync.valueOrNull;
-  return TotpNotifier(crypto, cloud);
+  final storage = ref.watch(storageServiceProvider);
+  return TotpNotifier(crypto, cloud, storage);
 });

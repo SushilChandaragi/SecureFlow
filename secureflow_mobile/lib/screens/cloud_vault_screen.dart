@@ -1,6 +1,7 @@
-/// Cloud Vault Screen — masonry grid of encrypted assets (§2)
+/// Cloud Vault Screen — masonry grid of encrypted assets + file upload (§2)
 library;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
@@ -14,11 +15,94 @@ import '../widgets/tactical_label.dart';
 import '../widgets/sf_badge.dart';
 import 'document_viewer_screen.dart';
 
-class CloudVaultScreen extends ConsumerWidget {
+class CloudVaultScreen extends ConsumerStatefulWidget {
   const CloudVaultScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CloudVaultScreen> createState() => _CloudVaultScreenState();
+}
+
+class _CloudVaultScreenState extends ConsumerState<CloudVaultScreen> {
+  bool _uploading = false;
+
+  Future<void> _pickAndUpload() async {
+    // Check cloud configured
+    final cloud = ref.read(cloudServiceProvider).valueOrNull;
+    if (cloud == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: SFColors.bgCard,
+          content: Text(
+            'CLOUD NOT CONFIGURED — ADD AWS CREDENTIALS IN SETTINGS',
+            style: SFTypography.metadata.copyWith(color: SFColors.danger),
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Pick file (reads bytes into RAM, no disk copy)
+    final result = await FilePicker.pickFiles(
+      withData: true,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: SFColors.bgCard,
+          content: Text('COULD NOT READ FILE', style: SFTypography.metadata),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      // Encrypt then upload
+      final crypto = ref.read(cryptoServiceProvider);
+      final encrypted = crypto.isUnlocked
+          ? crypto.encryptToBlob(bytes)
+          : bytes; // No vault key — upload raw (user should see warning)
+
+      await cloud.uploadVaultFile(encrypted, file.name);
+
+      // Refresh the file list
+      ref.invalidate(vaultFilesProvider);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: SFColors.bgCard,
+          content: Text(
+            'UPLOADED: ${file.name}',
+            style: SFTypography.metadata.copyWith(color: SFColors.success),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: SFColors.bgCard,
+          content: Text(
+            'UPLOAD FAILED: $e',
+            style: SFTypography.metadata.copyWith(color: SFColors.danger),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final filesAsync = ref.watch(vaultFilesProvider);
 
     return Scaffold(
@@ -43,7 +127,7 @@ class CloudVaultScreen extends ConsumerWidget {
                 Expanded(
                   child: filesAsync.when(
                     data: (files) => files.isEmpty
-                        ? _EmptyState()
+                        ? _EmptyState(onUpload: _pickAndUpload)
                         : _FileGrid(files: files),
                     loading: () => const Center(
                       child: CircularProgressIndicator(
@@ -57,11 +141,36 @@ class CloudVaultScreen extends ConsumerWidget {
                 ),
               ],
             ),
-            // Persistent FAB (§2 Cloud Vault)
+
+            // Upload progress overlay
+            if (_uploading)
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black.withAlpha(150),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: SFColors.textMain,
+                        ),
+                        const SizedBox(height: SFSpacing.md),
+                        Text('ENCRYPTING & UPLOADING...',
+                            style: SFTypography.metadata),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // FAB
             Positioned(
               bottom: 90,
               right: SFSpacing.base,
-              child: _UploadFab(ref: ref),
+              child: _uploading
+                  ? const SizedBox.shrink()
+                  : _UploadFab(onTap: _pickAndUpload),
             ),
           ],
         ),
@@ -98,10 +207,9 @@ class _FileCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return BentoCard(
       onTap: () {
-        // Navigate to document viewer
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (_) => _DocumentViewerRoute(file: file),
+            builder: (_) => DocumentViewerScreen(file: file),
           ),
         );
       },
@@ -109,12 +217,11 @@ class _FileCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // File icon + classification
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Icon(_fileIcon(file.name), size: 20, color: SFColors.textMuted),
-              SFBadge(file.classification),
+              Flexible(child: SFBadge(file.classification)),
             ],
           ),
           const SizedBox(height: SFSpacing.sm),
@@ -153,15 +260,38 @@ class _FileCard extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
+  final VoidCallback onUpload;
+  const _EmptyState({required this.onUpload});
+
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.lock_outline, size: 40, color: SFColors.textFaint),
-          SizedBox(height: SFSpacing.sm),
-          TacticalLabel(SFCopy.vaultEmpty, color: SFColors.textFaint),
+          const Icon(Icons.lock_outline, size: 40, color: SFColors.textFaint),
+          const SizedBox(height: SFSpacing.sm),
+          const TacticalLabel(SFCopy.vaultEmpty, color: SFColors.textFaint),
+          const SizedBox(height: SFSpacing.xl),
+          GestureDetector(
+            onTap: onUpload,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: SFColors.borderMedium),
+                borderRadius: BorderRadius.circular(SFRadius.small),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.upload_outlined, size: 14, color: SFColors.textMuted),
+                  const SizedBox(width: 8),
+                  Text(SFCopy.secureUpload,
+                      style: SFTypography.metadata.copyWith(color: SFColors.textMuted)),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -169,13 +299,13 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _UploadFab extends StatelessWidget {
-  final WidgetRef ref;
-  const _UploadFab({required this.ref});
+  final VoidCallback onTap;
+  const _UploadFab({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => _showUploadDialog(context),
+      onTap: onTap,
       child: Container(
         width: 52, height: 52,
         decoration: BoxDecoration(
@@ -189,48 +319,8 @@ class _UploadFab extends StatelessWidget {
             ),
           ],
         ),
-        child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
+        child: const Icon(Icons.upload_outlined, color: SFColors.bgPrimary, size: 22),
       ),
     );
-  }
-
-  void _showUploadDialog(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: SFColors.bgCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
-        side: BorderSide(color: SFColors.borderSoft),
-      ),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(SFSpacing.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const TacticalLabel(SFCopy.secureUpload, color: SFColors.textMuted),
-            const SizedBox(height: SFSpacing.md),
-            Text('SELECT A FILE TO ENCRYPT AND UPLOAD',
-                style: SFTypography.bodyMuted),
-            const SizedBox(height: SFSpacing.xl),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('CANCEL'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Navigates to the document viewer
-class _DocumentViewerRoute extends StatelessWidget {
-  final VaultFile file;
-  const _DocumentViewerRoute({required this.file});
-
-  @override
-  Widget build(BuildContext context) {
-    return DocumentViewerScreen(file: file);
   }
 }

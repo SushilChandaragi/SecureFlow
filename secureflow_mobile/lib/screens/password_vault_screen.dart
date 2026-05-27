@@ -1,4 +1,4 @@
-/// Password Vault Screen — hold-to-reveal credentials (§2)
+/// Password Vault Screen — hold-to-reveal credentials + add/delete (§2)
 library;
 
 import 'dart:async';
@@ -30,6 +30,21 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
     super.dispose();
   }
 
+  void _showAddSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: SFColors.bgCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
+        side: BorderSide(color: SFColors.borderSoft),
+      ),
+      builder: (_) => _AddCredentialSheet(
+        onAdd: (cred) => ref.read(credentialProvider.notifier).add(cred),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final creds = ref.watch(credentialProvider);
@@ -40,6 +55,24 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
 
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
+      floatingActionButton: GestureDetector(
+        onTap: _showAddSheet,
+        child: Container(
+          width: 52, height: 52,
+          decoration: BoxDecoration(
+            color: SFColors.textMain,
+            borderRadius: BorderRadius.circular(SFRadius.pill),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(100),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
+        ),
+      ),
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -53,7 +86,6 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
                   const SizedBox(height: 6),
                   Text('PASSWORD VAULT', style: SFTypography.h1),
                   const SizedBox(height: SFSpacing.md),
-                  // Monolithic search bar
                   TextField(
                     controller: _searchCtrl,
                     onChanged: (v) => setState(() => _query = v),
@@ -71,24 +103,79 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
             ),
             Expanded(
               child: filtered.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.key_outlined, size: 32,
+                          const Icon(Icons.key_outlined, size: 32,
                               color: SFColors.textFaint),
-                          SizedBox(height: SFSpacing.sm),
-                          TacticalLabel(SFCopy.passwordsEmpty,
+                          const SizedBox(height: SFSpacing.sm),
+                          const TacticalLabel(SFCopy.passwordsEmpty,
                               color: SFColors.textFaint),
+                          const SizedBox(height: SFSpacing.xl),
+                          GestureDetector(
+                            onTap: _showAddSheet,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: SFColors.borderMedium),
+                                borderRadius: BorderRadius.circular(SFRadius.small),
+                              ),
+                              child: const TacticalLabel('TAP + TO ADD CREDENTIAL',
+                                  color: SFColors.textMuted),
+                            ),
+                          ),
                         ],
                       ),
                     )
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(
-                          SFSpacing.base, 0, SFSpacing.base, 80),
+                          SFSpacing.base, 0, SFSpacing.base, 100),
                       itemCount: filtered.length,
                       separatorBuilder: (_, __) => const SizedBox(height: SFSpacing.base),
-                      itemBuilder: (_, i) => _CredentialCard(cred: filtered[i]),
+                      itemBuilder: (_, i) => Dismissible(
+                        key: ValueKey(filtered[i].storeKey),
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          decoration: BoxDecoration(
+                            color: SFColors.dangerMuted,
+                            borderRadius: BorderRadius.circular(SFRadius.bento),
+                          ),
+                          child: const Icon(Icons.delete_outline,
+                              color: SFColors.danger, size: 20),
+                        ),
+                        confirmDismiss: (_) => showDialog<bool>(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            backgroundColor: SFColors.bgCard,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(SFRadius.bento),
+                              side: const BorderSide(color: SFColors.borderSoft),
+                            ),
+                            title: Text('DELETE CREDENTIAL', style: SFTypography.body),
+                            content: Text(
+                              'Remove "${filtered[i].website}" from vault? This cannot be undone.',
+                              style: SFTypography.bodyMuted,
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: Text('CANCEL', style: SFTypography.metadata),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                child: Text('DELETE',
+                                    style: SFTypography.metadata.copyWith(color: SFColors.danger)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        onDismissed: (_) =>
+                            ref.read(credentialProvider.notifier).remove(filtered[i]),
+                        child: _CredentialCard(cred: filtered[i]),
+                      ),
                     ),
             ),
           ],
@@ -97,6 +184,8 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
     );
   }
 }
+
+// ─── Credential Card ─────────────────────────────────────────────────────────
 
 class _CredentialCard extends StatefulWidget {
   final Credential cred;
@@ -140,7 +229,6 @@ class _CredentialCardState extends State<_CredentialCard> {
         ]),
       ),
     );
-    // Auto-clear clipboard after 5s
     _clipClearTimer?.cancel();
     _clipClearTimer = Timer(const Duration(seconds: 5), () {
       Clipboard.setData(const ClipboardData(text: ''));
@@ -159,7 +247,6 @@ class _CredentialCardState extends State<_CredentialCard> {
     return BentoCard(
       child: Row(
         children: [
-          // Grayscale favicon placeholder
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
@@ -186,7 +273,6 @@ class _CredentialCardState extends State<_CredentialCard> {
               ],
             ),
           ),
-          // Hold to reveal zone
           GestureDetector(
             onLongPressStart: _onLongPressStart,
             onLongPressEnd: _onLongPressEnd,
@@ -212,6 +298,153 @@ class _CredentialCardState extends State<_CredentialCard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Add Credential Sheet ────────────────────────────────────────────────────
+
+class _AddCredentialSheet extends StatefulWidget {
+  final void Function(Credential) onAdd;
+  const _AddCredentialSheet({required this.onAdd});
+
+  @override
+  State<_AddCredentialSheet> createState() => _AddCredentialSheetState();
+}
+
+class _AddCredentialSheetState extends State<_AddCredentialSheet> {
+  final _formKey    = GlobalKey<FormState>();
+  final _siteCtrl   = TextEditingController();
+  final _userCtrl   = TextEditingController();
+  final _passCtrl   = TextEditingController();
+  final _notesCtrl  = TextEditingController();
+  bool _passVisible = false;
+
+  @override
+  void dispose() {
+    _siteCtrl.dispose();
+    _userCtrl.dispose();
+    _passCtrl.dispose();
+    _notesCtrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    final cred = Credential(
+      website: _siteCtrl.text.trim(),
+      username: _userCtrl.text.trim(),
+      password: _passCtrl.text,
+      notes: _notesCtrl.text.trim(),
+    );
+    widget.onAdd(cred);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(SFSpacing.xl),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Header
+                Row(
+                  children: [
+                    const TacticalLabel('NEW CREDENTIAL', color: SFColors.textMuted),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: const Icon(Icons.close, size: 18, color: SFColors.textFaint),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: SFSpacing.xl),
+
+                // Website/Service
+                TextFormField(
+                  controller: _siteCtrl,
+                  style: SFTypography.body,
+                  decoration: const InputDecoration(
+                    labelText: 'WEBSITE / SERVICE',
+                    prefixIcon: Icon(Icons.language, size: 16, color: SFColors.textFaint),
+                    contentPadding: EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
+                  ),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                ),
+                const SizedBox(height: SFSpacing.md),
+
+                // Username
+                TextFormField(
+                  controller: _userCtrl,
+                  style: SFTypography.body,
+                  decoration: const InputDecoration(
+                    labelText: 'USERNAME / EMAIL',
+                    prefixIcon: Icon(Icons.person_outline, size: 16, color: SFColors.textFaint),
+                    contentPadding: EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
+                  ),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                ),
+                const SizedBox(height: SFSpacing.md),
+
+                // Password
+                TextFormField(
+                  controller: _passCtrl,
+                  obscureText: !_passVisible,
+                  style: SFTypography.terminal.copyWith(fontSize: 14),
+                  decoration: InputDecoration(
+                    labelText: 'PASSWORD',
+                    prefixIcon: const Icon(Icons.lock_outline, size: 16, color: SFColors.textFaint),
+                    suffixIcon: GestureDetector(
+                      onTap: () => setState(() => _passVisible = !_passVisible),
+                      child: Icon(
+                        _passVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                        size: 16, color: SFColors.textFaint,
+                      ),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
+                  ),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                ),
+                const SizedBox(height: SFSpacing.md),
+
+                // Notes
+                TextFormField(
+                  controller: _notesCtrl,
+                  style: SFTypography.body,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'NOTES (optional)',
+                    prefixIcon: Icon(Icons.notes, size: 16, color: SFColors.textFaint),
+                    contentPadding: EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
+                  ),
+                ),
+                const SizedBox(height: SFSpacing.xl),
+
+                ElevatedButton(
+                  onPressed: _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: SFColors.textMain,
+                    foregroundColor: SFColors.bgPrimary,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                    ),
+                  ),
+                  child: Text('SAVE TO VAULT', style: SFTypography.button),
+                ),
+                const SizedBox(height: SFSpacing.base),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
