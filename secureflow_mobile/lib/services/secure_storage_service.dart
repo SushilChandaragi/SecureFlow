@@ -1,7 +1,7 @@
 /// SecureFlow Mobile — SecureStorageService
 ///
-/// Wraps flutter_secure_storage for saving sensitive config (AWS creds, mock secret).
-/// Uses Android Keystore-backed AES encryption.
+/// Wraps flutter_secure_storage for saving sensitive config (AWS creds, NFC key,
+/// settings toggles, and credential/TOTP caches).
 library;
 
 import 'dart:convert';
@@ -18,9 +18,12 @@ class SecureStorageService {
   static const _kAwsRegion       = 'sf_aws_region';
   static const _kS3Bucket        = 'sf_s3_bucket_name';
   static const _kMockHardware    = 'sf_mock_hardware_secret';
-  static const _kNfcExpected     = 'sf_nfc_expected_secret';
+  static const _kDesktopSecret   = 'sf_desktop_shared_secret'; // UTF-8 of mock_hardware_secret.txt
+  static const _kNfcExpected     = 'sf_nfc_expected_secret';      // bytes (legacy)
+  static const _kNfcExpectedStr  = 'sf_nfc_expected_string';      // plain UTF-8
   static const _kPasswordStore   = 'sf_password_store_cache';
   static const _kTotpStore       = 'sf_totp_store_cache';
+  static const _kSettings        = 'sf_settings_json';
 
   // ── AWS Credentials ──────────────────────────────────────────────────────
 
@@ -62,8 +65,46 @@ class SecureStorageService {
     return base64Decode(b64);
   }
 
-  // ── NFC Expected Secret (bind to one tag) ───────────────────────────────
+  // ── Desktop Shared Secret (links mobile to desktop mock_hardware_secret.txt) ─
 
+  /// Save the exact string contents of the desktop's mock_hardware_secret.txt.
+  /// The mobile encodes this as UTF-8 bytes (no trailing whitespace trimming)
+  /// to exactly reproduce what Python's `path.read_bytes()` returns.
+  Future<void> saveDesktopSecret(String secret) async {
+    await _storage.write(key: _kDesktopSecret, value: secret);
+  }
+
+  /// Returns the raw UTF-8 bytes of the stored desktop secret, or null if not set.
+  Future<Uint8List?> loadDesktopSecretBytes() async {
+    final s = await _storage.read(key: _kDesktopSecret);
+    if (s == null || s.isEmpty) return null;
+    return Uint8List.fromList(utf8.encode(s));
+  }
+
+  Future<String?> loadDesktopSecretString() async {
+    return _storage.read(key: _kDesktopSecret);
+  }
+
+  Future<void> clearDesktopSecret() async {
+    await _storage.delete(key: _kDesktopSecret);
+    await _storage.delete(key: _kMockHardware); // also clear random secret
+  }
+
+  // ── NFC Expected Secret ─────────────────────────────────────────────────
+  // We store the plain UTF-8 string from the tag (e.g. SECUREFLOW-NFC-KEY-V1-A3F9K2M7)
+  // and compare strings, which is far more reliable than byte-level comparison.
+
+  /// Save the NFC key as a trimmed plain string.
+  Future<void> saveNfcSecretString(String secret) async {
+    await _storage.write(key: _kNfcExpectedStr, value: secret.trim());
+  }
+
+  /// Load the stored NFC key string. Returns null if not yet bound.
+  Future<String?> loadNfcSecretString() async {
+    return _storage.read(key: _kNfcExpectedStr);
+  }
+
+  // Legacy bytes API (kept for compat, no longer used by auth flow)
   Future<void> saveNfcSecret(Uint8List secret) async {
     await _storage.write(key: _kNfcExpected, value: base64Encode(secret));
   }
@@ -74,7 +115,23 @@ class SecureStorageService {
     return base64Decode(b64);
   }
 
-  // ── Credential Cache (encrypted at app level too via crypto_service) ──────
+  // ── Settings ─────────────────────────────────────────────────────────────
+
+  Future<void> saveSettings(Map<String, dynamic> settings) async {
+    await _storage.write(key: _kSettings, value: jsonEncode(settings));
+  }
+
+  Future<Map<String, dynamic>> loadSettings() async {
+    final raw = await _storage.read(key: _kSettings);
+    if (raw == null) return {};
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  // ── Credential Cache ──────────────────────────────────────────────────────
 
   Future<void> savePasswordStoreJson(String json) async {
     await _storage.write(key: _kPasswordStore, value: json);

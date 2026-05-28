@@ -12,6 +12,7 @@ import '../widgets/sf_badge.dart';
 import '../widgets/nav_pill.dart';
 import 'password_vault_screen.dart';
 import 'authenticator_screen.dart';
+import 'document_vault_screen.dart';
 import 'settings_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
@@ -32,6 +33,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(credentialProvider.notifier).load();
       ref.read(totpProvider.notifier).load();
+      ref.read(documentProvider.notifier).load();
     });
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -79,13 +81,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         return const PasswordVaultScreen();
       case NavTab.shield:
         return const AuthenticatorScreen();
+      case NavTab.folder:
+        return const DocumentVaultScreen();
       case NavTab.gear:
         return const SettingsScreen();
     }
   }
 }
 
-// ─── Vault Home — clean vertical layout, no bento grid ───────────────────────
+// ─── Vault Home ───────────────────────────────────────────────────────────────
 
 class _VaultHome extends ConsumerWidget {
   final String sessionTime;
@@ -93,17 +97,23 @@ class _VaultHome extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final files   = ref.watch(vaultFilesProvider);
-    final creds   = ref.watch(credentialProvider);
-    final totps   = ref.watch(totpProvider);
-    final session = ref.watch(sessionProvider);
+    final filesAsync = ref.watch(vaultFilesProvider);
+    final creds      = ref.watch(credentialProvider);
+    final totps      = ref.watch(totpProvider);
+    final docs       = ref.watch(documentProvider);
+    final session    = ref.watch(sessionProvider);
+
+    // Derived values from live data
+    final cloudCount = filesAsync.valueOrNull?.length ?? 0;
+    final cloudError = filesAsync.hasError;
+    final cloudLoading = filesAsync.isLoading;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(
           SFSpacing.base, SFSpacing.md, SFSpacing.base, 110),
       children: [
 
-        // ── Top status bar ────────────────────────────────────────────
+        // ── Status bar ────────────────────────────────────────────────
         Row(
           children: [
             _GlyphBox(),
@@ -125,18 +135,20 @@ class _VaultHome extends ConsumerWidget {
 
         const SizedBox(height: SFSpacing.xl),
 
-        // ── Section: HEADLINE ─────────────────────────────────────────
+        // ── Title ─────────────────────────────────────────────────────
         Text('SECUREFLOW', style: SFTypography.h1),
         const SizedBox(height: 4),
         Text(
-          'Zero-knowledge enclave · Hardware-tethered',
+          session.profile?.authMethodLabel != null
+              ? '${session.profile!.authMethodLabel} · Hardware-tethered'
+              : 'Zero-knowledge enclave',
           style: SFTypography.terminal.copyWith(fontSize: 11),
         ),
 
         const SizedBox(height: SFSpacing.xl),
         _Divider(),
 
-        // ── Stats row ─────────────────────────────────────────────────
+        // ── Stats ─────────────────────────────────────────────────────
         const SizedBox(height: SFSpacing.lg),
         Row(
           children: [
@@ -157,22 +169,10 @@ class _VaultHome extends ConsumerWidget {
             ),
             _VerticalDivider(),
             Expanded(
-              child: files.when(
-                data: (list) => _StatTile(
-                  label: 'VAULT FILES',
-                  value: '${list.length}',
-                  icon: Icons.lock_outline,
-                ),
-                loading: () => const _StatTile(
-                  label: 'VAULT FILES',
-                  value: '—',
-                  icon: Icons.lock_outline,
-                ),
-                error: (_, __) => const _StatTile(
-                  label: 'VAULT FILES',
-                  value: 'ERR',
-                  icon: Icons.lock_outline,
-                ),
+              child: _StatTile(
+                label: 'DOCUMENTS',
+                value: '${docs.length}',
+                icon: Icons.folder_outlined,
               ),
             ),
           ],
@@ -182,7 +182,7 @@ class _VaultHome extends ConsumerWidget {
         _Divider(),
         const SizedBox(height: SFSpacing.xl),
 
-        // ── Section: AUTH METHOD ──────────────────────────────────────
+        // ── Authentication ────────────────────────────────────────────
         const _SectionHeader('AUTHENTICATION'),
         const SizedBox(height: SFSpacing.md),
         _InfoRow(
@@ -202,19 +202,14 @@ class _VaultHome extends ConsumerWidget {
         _Divider(),
         const SizedBox(height: SFSpacing.xl),
 
-        // ── Section: CLOUD VAULT ──────────────────────────────────────
+        // ── Cloud Vault (live data) ───────────────────────────────────
         const _SectionHeader('CLOUD VAULT'),
         const SizedBox(height: SFSpacing.md),
-        _CloudStatusCard(files: files),
-
-        const SizedBox(height: SFSpacing.xl),
-        _Divider(),
-        const SizedBox(height: SFSpacing.xl),
-
-        // ── Section: SECURITY STATUS ──────────────────────────────────
-        const _SectionHeader('SECURITY STATUS'),
-        const SizedBox(height: SFSpacing.md),
-        _SecurityStatusList(),
+        _CloudStatusCard(
+          count: cloudCount,
+          isLoading: cloudLoading,
+          hasError: cloudError,
+        ),
 
         const SizedBox(height: SFSpacing.xl),
       ],
@@ -332,11 +327,35 @@ class _InfoRow extends StatelessWidget {
 }
 
 class _CloudStatusCard extends StatelessWidget {
-  final AsyncValue<List<dynamic>> files;
-  const _CloudStatusCard({required this.files});
+  final int count;
+  final bool isLoading;
+  final bool hasError;
+
+  const _CloudStatusCard({
+    required this.count,
+    required this.isLoading,
+    required this.hasError,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final String statusText;
+    final Color statusColor;
+
+    if (isLoading) {
+      statusText = 'Connecting...';
+      statusColor = SFColors.textFaint;
+    } else if (hasError) {
+      statusText = 'Offline — check credentials in Settings';
+      statusColor = SFColors.textFaint;
+    } else if (count == 0) {
+      statusText = 'No encrypted files in S3';
+      statusColor = SFColors.textFaint;
+    } else {
+      statusText = '$count encrypted file${count == 1 ? '' : 's'} in S3';
+      statusColor = SFColors.success;
+    }
+
     return Container(
       padding: const EdgeInsets.all(SFSpacing.md),
       decoration: BoxDecoration(
@@ -346,69 +365,28 @@ class _CloudStatusCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.lock_outline, size: 20, color: SFColors.textMuted),
+          Icon(
+            hasError ? Icons.cloud_off_outlined : Icons.cloud_done_outlined,
+            size: 20,
+            color: hasError ? SFColors.textFaint : SFColors.textMuted,
+          ),
           const SizedBox(width: SFSpacing.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('GHOST WAREHOUSE', style: SFTypography.body.copyWith(fontSize: 13)),
+                Text('S3 ENCRYPTED VAULT',
+                    style: SFTypography.body.copyWith(fontSize: 13)),
                 const SizedBox(height: 2),
-                files.when(
-                  data: (list) => Text(
-                    list.isEmpty ? 'No assets stored' : '${list.length} encrypted asset(s)',
-                    style: SFTypography.bodyMuted.copyWith(fontSize: 11),
-                  ),
-                  loading: () => Text('Connecting...', style: SFTypography.bodyMuted.copyWith(fontSize: 11)),
-                  error: (_, __) => Text('Offline mode',
-                      style: SFTypography.bodyMuted.copyWith(fontSize: 11, color: SFColors.textFaint)),
-                ),
+                Text(statusText,
+                    style: SFTypography.bodyMuted
+                        .copyWith(fontSize: 11, color: statusColor)),
               ],
             ),
           ),
           const SFBadge('AES-256'),
         ],
       ),
-    );
-  }
-}
-
-class _SecurityStatusList extends StatelessWidget {
-  static const _items = [
-    (Icons.memory_outlined,      'RAM-ONLY OPERATION',   'No sensitive data on disk'),
-    (Icons.enhanced_encryption,  'AES-256-GCM ACTIVE',   'Hardware-grade encryption'),
-    (Icons.fingerprint,          'BIOMETRIC BOUND',       'Fingerprint authentication'),
-    (Icons.nfc,                  'NFC HARDWARE KEY',      'Physical token required'),
-    (Icons.timer_outlined,       'AUTO-LOCK ENABLED',     '5-minute inactivity timeout'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: List.generate(_items.length, (i) {
-        final item = _items[i];
-        return Padding(
-          padding: EdgeInsets.only(bottom: i < _items.length - 1 ? SFSpacing.sm : 0),
-          child: Row(
-            children: [
-              Icon(item.$1, size: 14, color: SFColors.textFaint),
-              const SizedBox(width: SFSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(item.$2, style: SFTypography.body.copyWith(fontSize: 12)),
-                    Text(item.$3,
-                        style: SFTypography.bodyMuted.copyWith(fontSize: 10)),
-                  ],
-                ),
-              ),
-              const Icon(Icons.check_circle_outline,
-                  size: 14, color: SFColors.success),
-            ],
-          ),
-        );
-      }),
     );
   }
 }

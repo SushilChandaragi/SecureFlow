@@ -43,6 +43,15 @@ dependencies:
   mobile_scanner: ^7.2.0
   file_picker: ^11.0.2
 
+  # ── Local Database ────────────────────────────────────────────────────
+  sqflite: ^2.3.3                # SQLite local DB
+  path: ^1.9.0                   # File path helpers
+
+  # ── Document Viewing ──────────────────────────────────────────────────
+  syncfusion_flutter_pdfviewer: ^28.2.11  # In-memory PDF rendering
+  mime: ^2.0.0                   # MIME type detection
+
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

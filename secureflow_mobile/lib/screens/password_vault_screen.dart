@@ -57,6 +57,24 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
     );
   }
 
+  void _showEditSheet(Credential existing) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: SFColors.bgCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
+        side: BorderSide(color: SFColors.borderSoft),
+      ),
+      builder: (_) => _AddCredentialSheet(
+        existing: existing,
+        onAdd: (updated) =>
+            ref.read(credentialProvider.notifier).update(existing, updated),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final creds = ref.watch(credentialProvider);
@@ -180,6 +198,7 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
                               const SizedBox(height: SFSpacing.sm),
                           itemBuilder: (_, i) => _CredentialCard(
                             cred: filtered[i],
+                            onEdit: () => _showEditSheet(filtered[i]),
                             onDelete: () => ref
                                 .read(credentialProvider.notifier)
                                 .remove(filtered[i]),
@@ -277,8 +296,13 @@ class _EmptyState extends StatelessWidget {
 
 class _CredentialCard extends StatefulWidget {
   final Credential cred;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
-  const _CredentialCard({required this.cred, required this.onDelete});
+  const _CredentialCard({
+    required this.cred,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   State<_CredentialCard> createState() => _CredentialCardState();
@@ -476,6 +500,21 @@ class _CredentialCardState extends State<_CredentialCard> {
                     ),
                   ),
                   const SizedBox(height: SFSpacing.xs),
+                  // Edit
+                  GestureDetector(
+                    onTap: widget.onEdit,
+                    child: Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: SFColors.bgPrimary,
+                        borderRadius: BorderRadius.circular(SFRadius.small),
+                        border: Border.all(color: SFColors.borderSoft),
+                      ),
+                      child: const Icon(Icons.edit_outlined,
+                          size: 13, color: SFColors.textFaint),
+                    ),
+                  ),
+                  const SizedBox(height: SFSpacing.xs),
                   // Delete
                   GestureDetector(
                     onTap: () => _confirmDelete(context),
@@ -504,7 +543,8 @@ class _CredentialCardState extends State<_CredentialCard> {
 
 class _AddCredentialSheet extends StatefulWidget {
   final void Function(Credential) onAdd;
-  const _AddCredentialSheet({required this.onAdd});
+  final Credential? existing; // non-null = edit mode
+  const _AddCredentialSheet({required this.onAdd, this.existing});
 
   @override
   State<_AddCredentialSheet> createState() => _AddCredentialSheetState();
@@ -518,6 +558,19 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
   final _notesCtrl = TextEditingController();
   bool _passVisible = false;
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-populate for edit mode
+    final e = widget.existing;
+    if (e != null) {
+      _siteCtrl.text  = e.website;
+      _userCtrl.text  = e.username;
+      _passCtrl.text  = e.password;
+      _notesCtrl.text = e.notes;
+    }
+  }
 
   @override
   void dispose() {
@@ -559,7 +612,10 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
               children: [
                 // ── Sheet header ─────────────────────────────────────
                 Row(children: [
-                  const TacticalLabel('NEW CREDENTIAL', color: SFColors.textMuted),
+                  TacticalLabel(
+                    widget.existing != null ? 'EDIT CREDENTIAL' : 'NEW CREDENTIAL',
+                    color: SFColors.textMuted,
+                  ),
                   const Spacer(),
                   GestureDetector(
                     onTap: () => Navigator.pop(context),
@@ -668,7 +724,10 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
                               child: CircularProgressIndicator(
                                   strokeWidth: 1.5,
                                   color: SFColors.textFaint))
-                          : Text('SAVE TO VAULT',
+                          : Text(
+                              widget.existing != null
+                                  ? 'UPDATE CREDENTIAL'
+                                  : 'SAVE TO VAULT',
                               style: SFTypography.button.copyWith(
                                   color: SFColors.bgPrimary)),
                     ),

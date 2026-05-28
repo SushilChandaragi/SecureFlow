@@ -1,4 +1,4 @@
-/// Authenticator Screen — horizontal TOTP carousel + add account (§2)
+/// Authenticator Screen — horizontal TOTP carousel + add/edit account (§2)
 library;
 
 import 'dart:async';
@@ -53,7 +53,7 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
     super.dispose();
   }
 
-  void _showAddSheet() {
+  void _showAddSheet([TotpKey? existing]) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -63,7 +63,14 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
         side: BorderSide(color: SFColors.borderSoft),
       ),
       builder: (_) => _AddTotpSheet(
-        onAdd: (key) => ref.read(totpProvider.notifier).add(key),
+        existing: existing,
+        onSave: (key) {
+          if (existing != null) {
+            ref.read(totpProvider.notifier).update(key);
+          } else {
+            ref.read(totpProvider.notifier).add(key);
+          }
+        },
       ),
     );
   }
@@ -75,7 +82,7 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
       floatingActionButton: GestureDetector(
-        onTap: _showAddSheet,
+        onTap: () => _showAddSheet(),
         child: Container(
           width: 52, height: 52,
           decoration: BoxDecoration(
@@ -120,7 +127,7 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
                       const TacticalLabel(SFCopy.totpEmpty, color: SFColors.textFaint),
                       const SizedBox(height: SFSpacing.xl),
                       GestureDetector(
-                        onTap: _showAddSheet,
+                        onTap: () => _showAddSheet(),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                           decoration: BoxDecoration(
@@ -147,6 +154,7 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
                     totpKey: totps[i],
                     remaining: _remaining,
                     onDelete: () => ref.read(totpProvider.notifier).remove(totps[i].id),
+                    onEdit: () => _showAddSheet(totps[i]),
                   ),
                 ),
               ),
@@ -179,17 +187,20 @@ class _TotpCard extends StatelessWidget {
   final TotpKey totpKey;
   final int remaining;
   final VoidCallback onDelete;
+  final VoidCallback onEdit;
 
   const _TotpCard({
     super.key,
     required this.totpKey,
     required this.remaining,
     required this.onDelete,
+    required this.onEdit,
   });
 
   @override
   Widget build(BuildContext context) {
-    final code = TotpService.generateCode(totpKey.secret, period: totpKey.period);
+    final isValid = TotpService.isSecretValid(totpKey.secret);
+    final code     = TotpService.generateCode(totpKey.secret, period: totpKey.period);
     final progress = TotpService.ringProgress(period: totpKey.period);
     final formatted = TotpService.formatCode(code);
 
@@ -199,21 +210,38 @@ class _TotpCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: SFColors.bgCard,
           borderRadius: BorderRadius.circular(SFRadius.bento),
-          border: Border.all(color: SFColors.borderSoft),
+          border: Border.all(
+            color: isValid ? SFColors.borderSoft : SFColors.borderDanger,
+          ),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // ── Header row (label + edit + delete) ──────────────────────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: SFSpacing.base),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Flexible(
-                    child: TacticalLabel(totpKey.displayName.toUpperCase(),
-                        color: SFColors.textMuted),
+                  Expanded(
+                    child: TacticalLabel(
+                      totpKey.displayName.toUpperCase(),
+                      color: SFColors.textMuted,
+                    ),
                   ),
-                  const SizedBox(width: 8),
+                  // Error badge for invalid secret
+                  if (!isValid) ...[
+                    const Icon(Icons.warning_amber_rounded,
+                        size: 14, color: SFColors.danger),
+                    const SizedBox(width: 6),
+                  ],
+                  // Edit button
+                  GestureDetector(
+                    onTap: onEdit,
+                    child: const Icon(Icons.edit_outlined,
+                        size: 14, color: SFColors.textFaint),
+                  ),
+                  const SizedBox(width: 10),
+                  // Delete button
                   GestureDetector(
                     onTap: () async {
                       final ok = await showDialog<bool>(
@@ -222,37 +250,72 @@ class _TotpCard extends StatelessWidget {
                       );
                       if (ok == true) onDelete();
                     },
-                    child: const Icon(Icons.delete_outline, size: 14,
-                        color: SFColors.textFaint),
+                    child: const Icon(Icons.delete_outline,
+                        size: 14, color: SFColors.textFaint),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 4),
-            Text(totpKey.metaLine, style: SFTypography.bodyMuted.copyWith(fontSize: 11)),
+            Text(totpKey.metaLine,
+                style: SFTypography.bodyMuted.copyWith(fontSize: 11)),
+
+            // ── Invalid secret warning ────────────────────────────────────
+            if (!isValid) ...[
+              const SizedBox(height: SFSpacing.sm),
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: SFSpacing.base),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: SFColors.dangerMuted,
+                  borderRadius: BorderRadius.circular(SFRadius.small),
+                  border: Border.all(color: SFColors.borderDanger),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        size: 12, color: SFColors.danger),
+                    const SizedBox(width: 6),
+                    Text('INVALID BASE32 SECRET — TAP ✏ TO FIX',
+                        style: SFTypography.metadata.copyWith(
+                            color: SFColors.danger, fontSize: 10)),
+                  ],
+                ),
+              ),
+            ],
+
             const SizedBox(height: SFSpacing.xl),
+
+            // ── TOTP ring — code perfectly centred via Stack ──────────────
             TotpRing(
               progress: progress,
               size: 160,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  GestureDetector(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: code));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          backgroundColor: SFColors.bgCard,
-                          duration: const Duration(seconds: 5),
-                          content: Text(SFCopy.copying, style: SFTypography.metadata),
-                        ),
-                      );
-                    },
-                    child: Text(formatted, style: SFTypography.totpCode),
-                  ),
-                ],
+              child: GestureDetector(
+                onTap: isValid
+                    ? () {
+                        Clipboard.setData(ClipboardData(text: code));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: SFColors.bgCard,
+                            duration: const Duration(seconds: 5),
+                            content: Text(SFCopy.copying,
+                                style: SFTypography.metadata),
+                          ),
+                        );
+                      }
+                    : null,
+                child: Text(
+                  formatted,
+                  style: isValid
+                      ? SFTypography.totpCode
+                      : SFTypography.totpCode.copyWith(
+                          color: SFColors.danger.withAlpha(180)),
+                  textAlign: TextAlign.center,
+                ),
               ),
             ),
+
             const SizedBox(height: SFSpacing.md),
             Text(
               '${remaining}S REMAINING',
@@ -278,16 +341,19 @@ class _ConfirmDeleteDialog extends StatelessWidget {
     return AlertDialog(
       backgroundColor: SFColors.bgCard,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(SFRadius.bento),
-        side: const BorderSide(color: SFColors.borderSoft),
+        borderRadius: BorderRadius.circular(SFRadius.card),
+        side: const BorderSide(color: SFColors.borderDanger),
       ),
-      title: Text('REMOVE TOKEN', style: SFTypography.body),
-      content: Text('Remove "${name.toUpperCase()}" from your vault?',
-          style: SFTypography.bodyMuted),
+      title: Text('REMOVE TOKEN', style: SFTypography.cardTitle),
+      content: Text(
+        'Delete "$name" from vault?\nThis cannot be undone.',
+        style: SFTypography.bodyMuted,
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: Text('CANCEL', style: SFTypography.metadata),
+          child: Text('CANCEL',
+              style: SFTypography.metadata.copyWith(color: SFColors.textMuted)),
         ),
         TextButton(
           onPressed: () => Navigator.pop(context, true),
@@ -299,11 +365,12 @@ class _ConfirmDeleteDialog extends StatelessWidget {
   }
 }
 
-// ─── Add TOTP bottom sheet ───────────────────────────────────────────────────
+// ─── Add / Edit TOTP bottom sheet ────────────────────────────────────────────
 
 class _AddTotpSheet extends StatefulWidget {
-  final void Function(TotpKey) onAdd;
-  const _AddTotpSheet({required this.onAdd});
+  final TotpKey? existing;
+  final void Function(TotpKey) onSave;
+  const _AddTotpSheet({this.existing, required this.onSave});
 
   @override
   State<_AddTotpSheet> createState() => _AddTotpSheetState();
@@ -314,11 +381,21 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
   bool _scanning = false;
   final MobileScannerController _scanCtrl = MobileScannerController();
 
-  final _issuerCtrl  = TextEditingController();
-  final _accountCtrl = TextEditingController();
-  final _secretCtrl  = TextEditingController();
-  final _periodCtrl  = TextEditingController(text: '30');
+  late final TextEditingController _issuerCtrl;
+  late final TextEditingController _accountCtrl;
+  late final TextEditingController _secretCtrl;
+  late final TextEditingController _periodCtrl;
   final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    _issuerCtrl  = TextEditingController(text: e?.issuer  ?? '');
+    _accountCtrl = TextEditingController(text: e?.account ?? '');
+    _secretCtrl  = TextEditingController(text: e?.secret  ?? '');
+    _periodCtrl  = TextEditingController(text: (e?.period ?? 30).toString());
+  }
 
   @override
   void dispose() {
@@ -339,21 +416,21 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
     final uri = Uri.tryParse(raw);
     if (uri != null && uri.scheme == 'otpauth' && uri.host == 'totp') {
       final labelRaw = Uri.decodeComponent(uri.path.replaceFirst('/', ''));
-      final secret = uri.queryParameters['secret'] ?? '';
-      final issuer = uri.queryParameters['issuer'] ?? labelRaw.split(':').first;
-      final period = int.tryParse(uri.queryParameters['period'] ?? '30') ?? 30;
-      final account = labelRaw.contains(':') ? labelRaw.split(':').last : labelRaw;
+      final secret   = uri.queryParameters['secret'] ?? '';
+      final issuer   = uri.queryParameters['issuer'] ?? labelRaw.split(':').first;
+      final period   = int.tryParse(uri.queryParameters['period'] ?? '30') ?? 30;
+      final account  = labelRaw.contains(':') ? labelRaw.split(':').last : labelRaw;
 
       if (secret.isNotEmpty) {
         final key = TotpKey(
-          id: _genId(),
-          label: issuer,
-          issuer: issuer,
+          id:      widget.existing?.id ?? _genId(),
+          label:   issuer,
+          issuer:  issuer,
           account: account,
-          secret: secret,
-          period: period,
+          secret:  secret,
+          period:  period,
         );
-        widget.onAdd(key);
+        widget.onSave(key);
         Navigator.pop(context);
         return;
       }
@@ -364,22 +441,23 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
     );
   }
 
-  void _addManual() {
+  void _save() {
     if (!_formKey.currentState!.validate()) return;
     final key = TotpKey(
-      id: _genId(),
-      label: _issuerCtrl.text.trim(),
-      issuer: _issuerCtrl.text.trim(),
+      id:      widget.existing?.id ?? _genId(),
+      label:   _issuerCtrl.text.trim(),
+      issuer:  _issuerCtrl.text.trim(),
       account: _accountCtrl.text.trim(),
-      secret: _secretCtrl.text.trim().replaceAll(' ', '').toUpperCase(),
-      period: int.tryParse(_periodCtrl.text.trim()) ?? 30,
+      secret:  _secretCtrl.text.trim().replaceAll(' ', '').toUpperCase(),
+      period:  int.tryParse(_periodCtrl.text.trim()) ?? 30,
     );
-    widget.onAdd(key);
+    widget.onSave(key);
     Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
+    final isEdit = widget.existing != null;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SingleChildScrollView(
@@ -391,7 +469,10 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
             children: [
               Row(
                 children: [
-                  const TacticalLabel('ADD TOTP ACCOUNT', color: SFColors.textMuted),
+                  TacticalLabel(
+                    isEdit ? 'EDIT TOTP TOKEN' : 'ADD TOTP ACCOUNT',
+                    color: SFColors.textMuted,
+                  ),
                   const Spacer(),
                   GestureDetector(
                     onTap: () => Navigator.pop(context),
@@ -401,25 +482,27 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
               ),
               const SizedBox(height: SFSpacing.xl),
 
-              // Mode toggle
-              Row(children: [
-                _ModeBtn(
-                  label: 'SCAN QR',
-                  icon: Icons.qr_code_scanner,
-                  selected: _scanMode,
-                  onTap: () => setState(() => _scanMode = true),
-                ),
-                const SizedBox(width: SFSpacing.sm),
-                _ModeBtn(
-                  label: 'MANUAL',
-                  icon: Icons.keyboard_outlined,
-                  selected: !_scanMode,
-                  onTap: () => setState(() => _scanMode = false),
-                ),
-              ]),
-              const SizedBox(height: SFSpacing.xl),
+              // Mode toggle (only show for new entries)
+              if (!isEdit) ...[
+                Row(children: [
+                  _ModeBtn(
+                    label: 'SCAN QR',
+                    icon: Icons.qr_code_scanner,
+                    selected: _scanMode,
+                    onTap: () => setState(() => _scanMode = true),
+                  ),
+                  const SizedBox(width: SFSpacing.sm),
+                  _ModeBtn(
+                    label: 'MANUAL',
+                    icon: Icons.keyboard_outlined,
+                    selected: !_scanMode,
+                    onTap: () => setState(() => _scanMode = false),
+                  ),
+                ]),
+                const SizedBox(height: SFSpacing.xl),
+              ],
 
-              if (_scanMode) ...[
+              if (_scanMode && !isEdit) ...[
                 ClipRRect(
                   borderRadius: BorderRadius.circular(SFRadius.bento),
                   child: SizedBox(
@@ -444,23 +527,20 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
                     _SfField(
                       ctrl: _issuerCtrl,
                       label: 'ISSUER (e.g. GitHub)',
-                      validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                      validator: (v) => (v == null || v.isEmpty) ? 'REQUIRED' : null,
                     ),
                     const SizedBox(height: SFSpacing.md),
                     _SfField(
                       ctrl: _accountCtrl,
-                      label: 'ACCOUNT NAME (e.g. user@email.com)',
-                      validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                      label: 'ACCOUNT (e.g. user@email.com)',
+                      validator: (v) => (v == null || v.isEmpty) ? 'REQUIRED' : null,
                     ),
                     const SizedBox(height: SFSpacing.md),
                     _SfField(
                       ctrl: _secretCtrl,
                       label: 'SECRET KEY (Base32)',
-                      validator: (v) {
-                        if (v == null || v.isEmpty) return 'Required';
-                        if (v.trim().replaceAll(' ', '').length < 8) return 'Too short';
-                        return null;
-                      },
+                      // Use the safe TotpService validator
+                      validator: (v) => TotpService.validateBase32(v),
                     ),
                     const SizedBox(height: SFSpacing.md),
                     _SfField(
@@ -469,12 +549,12 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
                       keyboardType: TextInputType.number,
                       validator: (v) {
                         final n = int.tryParse(v ?? '');
-                        return (n == null || n < 1) ? 'Must be ≥ 1' : null;
+                        return (n == null || n < 1) ? 'MUST BE ≥ 1' : null;
                       },
                     ),
                     const SizedBox(height: SFSpacing.xl),
                     ElevatedButton(
-                      onPressed: _addManual,
+                      onPressed: _save,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: SFColors.textMain,
                         foregroundColor: SFColors.bgPrimary,
@@ -483,7 +563,10 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
                           borderRadius: BorderRadius.circular(SFRadius.small),
                         ),
                       ),
-                      child: Text('ADD TO VAULT', style: SFTypography.button),
+                      child: Text(
+                        isEdit ? 'UPDATE TOKEN' : 'ADD TO VAULT',
+                        style: SFTypography.button,
+                      ),
                     ),
                   ]),
                 ),
@@ -573,26 +656,6 @@ class _SfField extends StatelessWidget {
         labelStyle: SFTypography.metadata.copyWith(color: SFColors.textFaint),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 14),
-      ),
-    );
-  }
-}
-
-// Minor typo guard - alias kept for any callers
-class TactualLabel extends StatelessWidget {
-  final String text;
-  final Color? color;
-  const TactualLabel(this.text, {super.key, this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 10,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 1.5,
-        color: color ?? SFColors.textMuted,
       ),
     );
   }

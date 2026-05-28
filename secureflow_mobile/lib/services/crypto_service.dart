@@ -58,7 +58,9 @@ class CryptoService {
   // Session key is kept as a Uint8List so it can be explicitly zeroed on lock.
   Uint8List? _sessionKey;
   Uint8List? _handshakeNonce;
-  String _handshakeMode = 'none'; // 'mock' | 'nfc' | 'none'
+  Uint8List? _hardwareSecret; // kept to re-derive key for cross-session decrypt
+  Uint8List? _nfcPayload;     // kept to re-derive NFC key for cross-session decrypt
+  String _handshakeMode = 'none';
   bool _isLocked = true;
 
   bool get isUnlocked => !_isLocked && _sessionKey != null;
@@ -66,30 +68,25 @@ class CryptoService {
 
   // ── Key Derivation ─────────────────────────────────────────────────────────
 
-  /// Perform mock handshake — derives session key from [hardwareSecret] bytes,
-  /// identical to CryptoEngine.mock_handshake() in the Python desktop.
-  ///
-  /// [hardwareSecret] corresponds to the contents of mock_hardware_secret.txt.
+  /// Perform mock handshake — derives session key from [hardwareSecret] bytes.
   void mockHandshake(Uint8List hardwareSecret) {
-    _wipeKey(); // Clear any existing session
+    _wipeKey();
+    _hardwareSecret = Uint8List.fromList(hardwareSecret); // keep for re-derive
     _handshakeNonce = _randomBytes(_kHandshakeNonce);
     _sessionKey = _hkdfDerive(hardwareSecret, _handshakeNonce!);
     _handshakeMode = 'mock';
     _isLocked = false;
   }
 
-  /// Perform NFC-backed handshake — [nfcPayload] is the 32-byte secret read
-  /// from the NFC tag. Replaces the ESP32 HMAC in the desktop version.
+  /// Perform NFC-backed handshake.
   void nfcHandshake(Uint8List nfcPayload) {
     _wipeKey();
-    // Use the NFC payload as IKM and a fresh random salt as the handshake nonce.
     _handshakeNonce = _randomBytes(_kHandshakeNonce);
-    // Combine NFC payload + random nonce as IKM, matching hardware_handshake
-    // variant: _derive_key_from_hmac(response, handshake_nonce).
     final ikm = Uint8List(_kHandshakeNonce * 2)
       ..setRange(0, _kHandshakeNonce, nfcPayload)
       ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, _handshakeNonce!);
     _sessionKey = _hkdfDeriveFromIkm(ikm);
+    _nfcPayload = Uint8List.fromList(nfcPayload); // keep for re-derive
     _handshakeMode = 'nfc';
     _isLocked = false;
   }
@@ -150,44 +147,42 @@ class CryptoService {
 
   // ── Internal — Format Decryptors ───────────────────────────────────────────
 
-  /// Decrypt a V3 blob: [SFV3][mode][32B hs-nonce][12B file-nonce][ct+tag]
   Uint8List _decryptV3(Uint8List blob) {
     const minLen = 4 + 1 + _kHandshakeNonce + _kFileNonce + _kGcmTagLen;
     if (blob.length < minLen) {
       throw const CryptoServiceException('V3 blob too small — corrupted.');
     }
 
-    // mode byte at offset 4; handshake nonce starts at 5
     final hsNonce   = blob.sublist(5, 5 + _kHandshakeNonce);
     final fileNonce = blob.sublist(5 + _kHandshakeNonce, 5 + _kHandshakeNonce + _kFileNonce);
     final ct        = blob.sublist(5 + _kHandshakeNonce + _kFileNonce);
     final mode      = blob[4];
 
+    // The blob carries hsNonce so we can always re-derive the exact key,
+    // even across sessions. We NEVER require nonce equality anymore.
     Uint8List derivedKey;
     if (mode == _kModeMock) {
-      // Re-derive the key using the stored hardware secret + this blob's nonce.
-      // This only works if the secret is available (mock mode).
-      // For NFC mode, we use the current session key directly if nonces match.
-      if (_bytesEqual(hsNonce, _handshakeNonce!)) {
-        derivedKey = Uint8List.fromList(_sessionKey!);
-      } else {
+      // Re-derive using stored hardware secret + blob's own nonce.
+      if (_hardwareSecret == null) {
         throw const CryptoServiceException(
-          'Handshake nonce mismatch. Re-authenticate to decrypt this file.');
+            'Mock hardware secret not available — re-authenticate with biometric.');
       }
+      derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
     } else {
-      // NFC/Hardware mode: current session key must match the blob's nonce.
-      if (_bytesEqual(hsNonce, _handshakeNonce!)) {
-        derivedKey = Uint8List.fromList(_sessionKey!);
-      } else {
+      // NFC/Hardware mode: re-derive from stored NFC payload + blob's nonce.
+      if (_nfcPayload == null) {
         throw const CryptoServiceException(
-          'NFC session nonce mismatch. Re-authenticate.');
+            'NFC payload not available — re-authenticate with NFC.');
       }
+      final ikm = Uint8List(_kHandshakeNonce * 2)
+        ..setRange(0, _kHandshakeNonce, _nfcPayload!)
+        ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
+      derivedKey = _hkdfDeriveFromIkm(ikm);
     }
 
     try {
       return _aesGcmDecrypt(derivedKey, fileNonce, ct);
     } finally {
-      // Zero the derived key copy when not using the session key directly.
       derivedKey.fillRange(0, derivedKey.length, 0);
     }
   }
@@ -298,8 +293,12 @@ class CryptoService {
   void _wipeKey() {
     _sessionKey?.fillRange(0, _sessionKey!.length, 0);
     _handshakeNonce?.fillRange(0, _handshakeNonce!.length, 0);
+    _hardwareSecret?.fillRange(0, _hardwareSecret!.length, 0);
+    _nfcPayload?.fillRange(0, _nfcPayload!.length, 0);
     _sessionKey = null;
     _handshakeNonce = null;
+    _hardwareSecret = null;
+    _nfcPayload = null;
   }
 
   static Uint8List _randomBytes(int length) {

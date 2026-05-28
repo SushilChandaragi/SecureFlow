@@ -30,6 +30,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   bool _isAuthenticating = false;
   bool _isNfcScanning = false;
+  bool _nfcConsumed   = false; // debounce: ignore subsequent NFC callbacks
   String _statusText = SFCopy.identityRequired;
 
   double _waveOffset = 0;
@@ -105,13 +106,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     }
     setState(() {
       _isNfcScanning = true;
+      _nfcConsumed   = false;   // reset for new scan
       _statusText = SFCopy.awaitingNfc;
     });
     auth.startNfcSession(
       onPayload: (Uint8List payload) {
+        if (_nfcConsumed) return;  // ignore extra callbacks from tag staying in field
+        _nfcConsumed = true;
         if (!mounted) return;
-        sfLog('LoginScreen: NFC payload len=${payload.length}');
-        ref.read(sessionProvider.notifier).unlockWithNfc(payload).then((ok) {
+        // Decode the raw payload as UTF-8 text (what the NFC Tools app wrote)
+        final tagText = _payloadToString(payload);
+        sfLog('LoginScreen: NFC text="$tagText"');
+        ref.read(sessionProvider.notifier).unlockWithNfcString(tagText).then((ok) {
           if (!mounted) return;
           sfLog('LoginScreen: NFC unlock result=$ok');
           if (ok) widget.onUnlocked();
@@ -140,6 +146,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         });
       },
     );
+  }
+
+  /// Decode NDEF text record bytes → plain string.
+  /// NDEF Text Record: byte[0] = status (0x02 = UTF-8, lang len = low 6 bits),
+  /// then lang code bytes, then the actual text.
+  String _payloadToString(Uint8List payload) {
+    try {
+      if (payload.isEmpty) return '';
+      final status = payload[0];
+      final langLen = status & 0x3F;
+      final textStart = 1 + langLen;
+      if (textStart < payload.length) {
+        return String.fromCharCodes(payload.sublist(textStart)).trim();
+      }
+      // Fallback: treat whole payload as UTF-8
+      return String.fromCharCodes(payload).trim();
+    } catch (_) {
+      return String.fromCharCodes(payload).trim();
+    }
   }
 
   @override

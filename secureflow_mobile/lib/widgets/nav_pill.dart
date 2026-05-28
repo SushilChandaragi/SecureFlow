@@ -5,7 +5,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../config/colors.dart';
 
-enum NavTab { vault, keys, shield, gear }
+enum NavTab { vault, keys, shield, folder, gear }
 
 class NavPill extends StatelessWidget {
   final NavTab current;
@@ -21,6 +21,7 @@ class NavPill extends StatelessWidget {
     (NavTab.vault,  Icons.lock_outline,      'Vault'),
     (NavTab.keys,   Icons.key_outlined,      'Keys'),
     (NavTab.shield, Icons.shield_outlined,   'Shield'),
+    (NavTab.folder, Icons.folder_outlined,   'Docs'),
     (NavTab.gear,   Icons.settings_outlined, 'Settings'),
   ];
 
@@ -29,14 +30,36 @@ class NavPill extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(SFRadius.pill),
       child: BackdropFilter(
-        // Glassmorphism blur (§10 Flutter Suggestions)
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
           decoration: BoxDecoration(
-            color: SFColors.bgCard.withAlpha(200),
+            // Multi-layer glass: very subtle white tint over pure black
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.white.withAlpha(18),
+                Colors.white.withAlpha(8),
+              ],
+            ),
             borderRadius: BorderRadius.circular(SFRadius.pill),
-            border: Border.all(color: SFColors.borderMedium, width: 1),
+            border: Border.all(
+              color: Colors.white.withAlpha(30),
+              width: 0.8,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(120),
+                blurRadius: 32,
+                offset: const Offset(0, 8),
+              ),
+              BoxShadow(
+                color: Colors.white.withAlpha(5),
+                blurRadius: 1,
+                offset: const Offset(0, -1),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -49,19 +72,26 @@ class NavPill extends StatelessWidget {
                   onTap: () => onTabChanged(tab),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeInOut,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: isActive
-                          ? SFColors.textMain.withAlpha(20)
+                          ? Colors.white.withAlpha(25)
                           : Colors.transparent,
                       borderRadius: BorderRadius.circular(SFRadius.pill),
+                      border: isActive
+                          ? Border.all(
+                              color: Colors.white.withAlpha(40),
+                              width: 0.6,
+                            )
+                          : null,
                     ),
                     child: Icon(
                       icon,
                       size: 22,
                       color: isActive
                           ? SFColors.textMain
-                          : SFColors.textFaint,
+                          : SFColors.textFaint.withAlpha(160),
                     ),
                   ),
                 ),
