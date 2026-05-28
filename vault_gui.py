@@ -1857,10 +1857,53 @@ class VaultGUI(ctk.CTk):
         )
         badge.grid(row=0, column=1, sticky="e")
 
+        destroy_btn = ctk.CTkButton(
+            row,
+            text="×",
+            width=28,
+            height=24,
+            fg_color="transparent",
+            hover_color=COLORS["danger_hover"],
+            text_color=COLORS["danger"],
+            font=FONTS["title"],
+            command=lambda s=source, i=identifier, l=label: self._delete_vault_file(s, i, l),
+        )
+        destroy_btn.grid(row=0, column=2, padx=(6, 0), sticky="e")
+
         state = "normal" if self.crypto.is_unlocked else "disabled"
         button.configure(state=state)
+        destroy_btn.configure(state=state)
         row.pack(fill="x", padx=8, pady=4)
         self._file_buttons.append(button)
+        self._file_buttons.append(destroy_btn)
+
+    def _delete_vault_file(self, source: str, identifier: str, label: str) -> None:
+        if not messagebox.askyesno("Confirm Destruction", f"Are you sure you want to permanently destroy '{label}' from {source}?"):
+            return
+
+        try:
+            if source == "local":
+                path = Path(identifier)
+                if path.is_file():
+                    path.unlink()
+                self._set_status_message(f"Destroyed local file: {label}")
+                self._log_event(f"Destroyed local file: {label}")
+            else:
+                if not self.cloud:
+                    raise CloudManagerError("Cloud not configured.")
+                self.cloud.delete_vault_file(identifier)
+                self._set_status_message(f"Destroyed cloud file: {label}")
+                self._log_event(f"Destroyed cloud file: {label}")
+
+            if self._last_selected_object == (source, identifier):
+                self._clear_viewer("File destroyed. Vault is empty.")
+                self._last_selected_object = None
+
+            self.refresh_vault_listing()
+        except Exception as exc:
+            logger.exception("Failed to destroy file")
+            self._set_status_message(str(exc), is_error=True)
+            messagebox.showerror("Destruction Failed", str(exc))
 
     def _start_hardware_monitor(self) -> None:
         self._stop_hardware_monitor()

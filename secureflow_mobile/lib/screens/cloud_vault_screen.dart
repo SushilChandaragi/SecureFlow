@@ -199,12 +199,77 @@ class _FileGrid extends StatelessWidget {
   }
 }
 
-class _FileCard extends StatelessWidget {
+class _FileCard extends ConsumerWidget {
   final VaultFile file;
   const _FileCard({required this.file});
 
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: SFColors.bgCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(SFRadius.card),
+          side: const BorderSide(color: SFColors.borderDanger),
+        ),
+        title: Text('DESTROY CLOUD FILE', style: SFTypography.cardTitle),
+        content: Text(
+          '"${file.displayName}" will be permanently deleted\nfrom S3 cloud vault.',
+          style: SFTypography.bodyMuted,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('CANCEL',
+                style: SFTypography.metadata
+                    .copyWith(color: SFColors.textMuted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('DESTROY',
+                style: SFTypography.metadata
+                    .copyWith(color: SFColors.danger)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final cloud = ref.read(cloudServiceProvider).valueOrNull;
+      if (cloud != null) {
+        try {
+          await cloud.deleteVaultFile(file.name);
+          ref.invalidate(vaultFilesProvider);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: SFColors.bgCard,
+                content: Text(
+                  'DELETED FROM CLOUD: ${file.displayName}',
+                  style: SFTypography.metadata.copyWith(color: SFColors.success),
+                ),
+              ),
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: SFColors.bgCard,
+                content: Text(
+                  'DELETE FAILED: $e',
+                  style: SFTypography.metadata.copyWith(color: SFColors.danger),
+                ),
+              ),
+            );
+          }
+        }
+      }
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return BentoCard(
       onTap: () {
         Navigator.of(context).push(
@@ -221,7 +286,21 @@ class _FileCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Icon(_fileIcon(file.name), size: 20, color: SFColors.textMuted),
-              Flexible(child: SFBadge(file.classification)),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(child: SFBadge(file.classification)),
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () => _confirmDelete(context, ref),
+                    child: const Icon(
+                      Icons.delete_outline,
+                      size: 16,
+                      color: SFColors.textFaint,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: SFSpacing.sm),

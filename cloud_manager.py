@@ -102,3 +102,11 @@ class CloudManager:
 
         buffer.seek(0)
         return buffer
+
+    def delete_vault_file(self, object_name: str) -> None:
+        """Delete an object from S3."""
+        try:
+            self._s3.delete_object(Bucket=self._bucket, Key=object_name)
+        except (ClientError, NoCredentialsError, EndpointConnectionError) as exc:
+            logger.exception("S3 delete failed")
+            raise CloudManagerError(f"Delete failed: {exc}") from exc

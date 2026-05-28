@@ -128,8 +128,6 @@ class _VaultHome extends ConsumerWidget {
                 ],
               ),
             ),
-            const SFBadge('RAM-ONLY',
-                color: SFColors.success, background: SFColors.successMuted),
           ],
         ),
 

@@ -157,32 +157,6 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 ],
               ),
             ),
-
-            // Info banner
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: SFSpacing.base),
-              child: Container(
-                padding: const EdgeInsets.all(SFSpacing.sm),
-                decoration: BoxDecoration(
-                  color: SFColors.bgElevated,
-                  borderRadius: BorderRadius.circular(SFRadius.small),
-                  border: Border.all(color: SFColors.borderSoft),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.security, size: 14, color: SFColors.success),
-                    const SizedBox(width: SFSpacing.xs),
-                    Expanded(
-                      child: Text(
-                        'RAM-ONLY DECRYPTION · ZERO DISK FOOTPRINT · AUTO-SYNC TO S3',
-                        style: SFTypography.metadata.copyWith(
-                            color: SFColors.textFaint, fontSize: 9),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
             const SizedBox(height: SFSpacing.md),
 
             // Document list
@@ -381,7 +355,7 @@ class _ConfirmDeleteDialog extends StatelessWidget {
       ),
       title: Text('DESTROY DOCUMENT', style: SFTypography.cardTitle),
       content: Text(
-        '"$name" will be permanently deleted\nfrom local storage.',
+        '"$name" will be permanently deleted\nfrom local storage and S3 cloud.',
         style: SFTypography.bodyMuted,
       ),
       actions: [
@@ -423,24 +397,6 @@ class _PdfViewerScreen extends StatelessWidget {
         title: Text(name,
             style: SFTypography.body.copyWith(fontSize: 13),
             overflow: TextOverflow.ellipsis),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: SFSpacing.base),
-            child: Center(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: SFColors.successMuted,
-                  borderRadius: BorderRadius.circular(SFRadius.pill),
-                ),
-                child: Text('IN-MEMORY',
-                    style: SFTypography.metadata
-                        .copyWith(color: SFColors.success, fontSize: 9)),
-              ),
-            ),
-          ),
-        ],
       ),
       body: SfPdfViewer.memory(bytes),
     );
