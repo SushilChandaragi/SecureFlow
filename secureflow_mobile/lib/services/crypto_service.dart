@@ -245,8 +245,8 @@ class CryptoService {
 
     final out = Uint8List(cipher.getOutputSize(plaintext.length));
     int offset = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
-    cipher.doFinal(out, offset);
-    return out;
+    int finalLen = cipher.doFinal(out, offset);
+    return out.sublist(0, offset + finalLen);
   }
 
   /// AES-256-GCM decrypt — mirrors Python: AESGCM(key).decrypt(nonce, ct, None)
@@ -258,8 +258,8 @@ class CryptoService {
     try {
       final out = Uint8List(cipher.getOutputSize(ciphertext.length));
       int offset = cipher.processBytes(ciphertext, 0, ciphertext.length, out, 0);
-      cipher.doFinal(out, offset);
-      return out;
+      int finalLen = cipher.doFinal(out, offset);
+      return out.sublist(0, offset + finalLen);
     } on InvalidCipherTextException catch (e) {
       throw CryptoServiceException('Decryption failed — wrong key or corrupted data: $e');
     }
