@@ -1,7 +1,11 @@
 boto3
 cryptography
 customtkinter
+matplotlib
+pandas
 pillow
 pymupdf
 pyserial
+pyotp
 python-dotenv
+scikit-learn

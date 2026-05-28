@@ -1,17 +1,12 @@
 /// Settings Screen — persistent toggles, AWS config, NFC key management (§2)
 library;
 
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:convert/convert.dart';
 import '../config/colors.dart';
 import '../config/typography.dart';
 import '../config/constants.dart';
 import '../services/vault_provider.dart';
-import '../services/secure_storage_service.dart';
 import '../widgets/tactical_label.dart';
 import '../widgets/panic_button.dart';
 
@@ -61,7 +56,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   _AppSettings _settings = const _AppSettings();
   bool _loaded = false;
   bool _saving = false;
-  bool _hasMvk = false;
 
   @override
   void initState() {
@@ -72,19 +66,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<void> _loadSettings() async {
     final storage = ref.read(storageServiceProvider);
     final map = await storage.loadSettings();
-    final mvk = await storage.loadMvkBytes();
     if (mounted) {
       setState(() {
         _settings = map.isNotEmpty ? _AppSettings.fromMap(map) : const _AppSettings();
         _loaded = true;
-        _hasMvk = mvk != null;
       });
     }
-  }
-
-  Future<void> _refreshMvkStatus() async {
-    final mvk = await ref.read(storageServiceProvider).loadMvkBytes();
-    if (mounted) setState(() => _hasMvk = mvk != null);
   }
 
   Future<void> _saveSettings() async {
@@ -200,36 +187,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Future<void> _showMvkSheet() async {
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: SFColors.bgCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
-        side: BorderSide(color: SFColors.borderSoft),
-      ),
-      builder: (_) => _MvkPairingSheet(
-        storage: ref.read(storageServiceProvider),
-        onPaired: _refreshMvkStatus,
-      ),
-    );
-    await _refreshMvkStatus();
-  }
-
-  Future<void> _clearMvk() async {
-    await ref.read(storageServiceProvider).clearMvk();
-    if (!mounted) return;
-    setState(() => _hasMvk = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: SFColors.bgCard,
-        content: Text('MVK CLEARED',
-            style: SFTypography.metadata.copyWith(color: SFColors.success)),
-      ),
-    );
-  }
-
   void _showNfcResetSheet() {
     showModalBottomSheet(
       context: context,
@@ -327,31 +284,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: SFSpacing.md),
             const _InfoRow('PROVIDER', 'AWS S3'),
             const _InfoRow('ENCRYPTION', 'AES-256-GCM CLIENT-SIDE'),
-            _InfoRow(
-              'MVK STATUS',
-              _hasMvk ? 'PAIRED' : 'NOT PAIRED',
-              valueColor: _hasMvk ? SFColors.success : SFColors.textFaint,
-            ),
             const SizedBox(height: SFSpacing.md),
             _OutlineButton(
               label: 'CONFIGURE AWS CREDENTIALS',
               icon: Icons.cloud_outlined,
               onTap: _showAwsSheet,
             ),
-            const SizedBox(height: SFSpacing.md),
-            _OutlineButton(
-              label: 'PAIR MVK QR',
-              icon: Icons.qr_code_scanner,
-              onTap: _showMvkSheet,
-            ),
-            if (_hasMvk) ...[
-              const SizedBox(height: SFSpacing.md),
-              _OutlineButton(
-                label: 'CLEAR MVK',
-                icon: Icons.delete_outline,
-                onTap: _clearMvk,
-              ),
-            ],
 
             const SizedBox(height: SFSpacing.xl),
             _divider(),
@@ -674,10 +612,10 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
                   // Divider between AWS creds and vault key
                   const Divider(color: SFColors.borderSoft, height: 1),
                   const SizedBox(height: SFSpacing.lg),
-                  const TacticalLabel('LEGACY DESKTOP SECRET', color: SFColors.textMuted),
+                  const TacticalLabel('DESKTOP VAULT SECRET', color: SFColors.textMuted),
                   const SizedBox(height: 6),
                   Text(
-                    'Optional: paste mock_hardware_secret.txt for legacy desktop files. MVK QR pairing is preferred.',
+                    'Paste the contents of mock_hardware_secret.txt from your desktop. Required to decrypt files uploaded from the desktop app.',
                     style: SFTypography.bodyMuted.copyWith(fontSize: 10),
                   ),
                   const SizedBox(height: SFSpacing.md),
@@ -686,7 +624,7 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
                     obscureText: _secretObscure,
                     style: SFTypography.terminal.copyWith(fontSize: 12, color: SFColors.textMain),
                     decoration: InputDecoration(
-                      labelText: 'LEGACY SHARED SECRET',
+                      labelText: 'VAULT SHARED SECRET',
                       labelStyle: SFTypography.metadata.copyWith(color: SFColors.textFaint),
                       prefixIcon: const Icon(Icons.key_outlined, size: 16, color: SFColors.textFaint),
                       suffixIcon: GestureDetector(
@@ -751,241 +689,6 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(SFRadius.small),
           borderSide: const BorderSide(color: SFColors.danger)),
-      ),
-    );
-  }
-}
-
-// ─── MVK Pairing Sheet ─────────────────────────────────────────────────────
-
-class _MvkPairingSheet extends StatefulWidget {
-  final SecureStorageService storage;
-  final VoidCallback? onPaired;
-  const _MvkPairingSheet({required this.storage, this.onPaired});
-
-  @override
-  State<_MvkPairingSheet> createState() => _MvkPairingSheetState();
-}
-
-class _MvkPairingSheetState extends State<_MvkPairingSheet> {
-  final MobileScannerController _scanCtrl = MobileScannerController();
-  final TextEditingController _manualCtrl = TextEditingController();
-  bool _saving = false;
-  String? _status;
-  bool _isError = false;
-
-  @override
-  void dispose() {
-    _scanCtrl.dispose();
-    _manualCtrl.dispose();
-    super.dispose();
-  }
-
-  void _handleBarcode(BarcodeCapture capture) {
-    if (_saving) return;
-    if (capture.barcodes.isEmpty) return;
-    final raw = capture.barcodes.first.rawValue;
-    if (raw == null || raw.trim().isEmpty) return;
-    _saveFromRaw(raw);
-  }
-
-  Future<void> _saveFromRaw(String raw) async {
-    final mvk = _decodeMvk(raw);
-    if (mvk == null) {
-      _setStatus('INVALID MVK QR OR PAYLOAD', isError: true);
-      return;
-    }
-    await _saveMvk(mvk);
-  }
-
-  Future<void> _saveMvk(Uint8List mvk) async {
-    setState(() {
-      _saving = true;
-      _status = 'PAIRING MVK...';
-      _isError = false;
-    });
-    try {
-      await widget.storage.saveMvkBytes(mvk);
-      widget.onPaired?.call();
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: SFColors.bgCard,
-          content: Text('MVK PAIRED',
-              style: SFTypography.metadata.copyWith(color: SFColors.success)),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      _setStatus('FAILED TO SAVE MVK', isError: true);
-    } finally {
-      mvk.fillRange(0, mvk.length, 0);
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  void _saveManual() {
-    final raw = _manualCtrl.text.trim();
-    if (raw.isEmpty) {
-      _setStatus('PASTE MVK VALUE FIRST', isError: true);
-      return;
-    }
-    _saveFromRaw(raw);
-  }
-
-  void _setStatus(String message, {required bool isError}) {
-    if (!mounted) return;
-    setState(() {
-      _status = message;
-      _isError = isError;
-    });
-  }
-
-  Uint8List? _decodeMvk(String raw) {
-    var value = raw.trim();
-    if (value.isEmpty) return null;
-
-    if (value.startsWith('SF-MVK:')) {
-      value = value.substring(7).trim();
-    } else if (value.startsWith('MVK:')) {
-      value = value.substring(4).trim();
-    }
-
-    final uri = Uri.tryParse(value);
-    if (uri != null && (uri.scheme == 'secureflow' || uri.scheme == 'sf')) {
-      final key = uri.queryParameters['mvk'] ?? uri.queryParameters['key'];
-      if (key != null && key.isNotEmpty) {
-        value = key.trim();
-      }
-    }
-
-    if (value.startsWith('{')) {
-      try {
-        final json = jsonDecode(value);
-        if (json is Map<String, dynamic>) {
-          final key = json['mvk'] ?? json['key'] ?? json['mvk_b64'] ?? json['mvk_hex'];
-          if (key != null) value = key.toString().trim();
-        }
-      } catch (_) {}
-    }
-
-    final compact = value.replaceAll(RegExp(r'\s+'), '');
-
-    // Base64 (standard or URL-safe)
-    try {
-      final normalized = _normalizeBase64(compact);
-      final bytes = base64Decode(normalized);
-      if (bytes.length == 32) return bytes;
-    } catch (_) {}
-
-    // Hex
-    final hexCandidate = compact.replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
-    if (hexCandidate.length == 64) {
-      try {
-        return Uint8List.fromList(hex.decode(hexCandidate));
-      } catch (_) {
-        return null;
-      }
-    }
-
-    return null;
-  }
-
-  String _normalizeBase64(String input) {
-    var out = input.replaceAll('-', '+').replaceAll('_', '/');
-    while (out.length % 4 != 0) {
-      out += '=';
-    }
-    return out;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(SFSpacing.xl),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(children: [
-                const TacticalLabel('PAIR MASTER VAULT KEY', color: SFColors.textMuted),
-                const Spacer(),
-                GestureDetector(
-                  onTap: () => Navigator.pop(context),
-                  child: const Icon(Icons.close, size: 18, color: SFColors.textFaint),
-                ),
-              ]),
-              const SizedBox(height: SFSpacing.lg),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(SFRadius.bento),
-                child: SizedBox(
-                  height: 260,
-                  child: MobileScanner(
-                    controller: _scanCtrl,
-                    onDetect: _handleBarcode,
-                  ),
-                ),
-              ),
-              const SizedBox(height: SFSpacing.md),
-              Center(
-                child: Text(
-                  'POINT CAMERA AT MVK QR CODE',
-                  style: SFTypography.metadata.copyWith(color: SFColors.textFaint),
-                ),
-              ),
-              const SizedBox(height: SFSpacing.lg),
-              const Divider(color: SFColors.borderSoft, height: 1),
-              const SizedBox(height: SFSpacing.lg),
-              Text(
-                'OR PASTE MVK (BASE64 OR HEX)',
-                style: SFTypography.metadata.copyWith(color: SFColors.textMuted),
-              ),
-              const SizedBox(height: SFSpacing.sm),
-              TextField(
-                controller: _manualCtrl,
-                maxLines: 2,
-                style: SFTypography.terminal.copyWith(fontSize: 12, color: SFColors.textMain),
-                decoration: InputDecoration(
-                  hintText: 'SF-MVK:... or base64/hex value',
-                  hintStyle: SFTypography.bodyMuted.copyWith(fontSize: 10),
-                  filled: true,
-                  fillColor: SFColors.bgPrimary,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: 12),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(SFRadius.small),
-                    borderSide: const BorderSide(color: SFColors.borderSoft)),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(SFRadius.small),
-                    borderSide: const BorderSide(color: SFColors.borderSoft)),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(SFRadius.small),
-                    borderSide: const BorderSide(color: SFColors.borderMedium)),
-                ),
-              ),
-              const SizedBox(height: SFSpacing.md),
-              _FilledButton(
-                label: _saving ? 'PAIRING...' : 'SAVE MVK',
-                icon: Icons.vpn_key_outlined,
-                onTap: _saving ? null : _saveManual,
-              ),
-              if (_status != null) ...[
-                const SizedBox(height: SFSpacing.md),
-                Text(
-                  _status!,
-                  textAlign: TextAlign.center,
-                  style: SFTypography.metadata.copyWith(
-                    color: _isError ? SFColors.danger : SFColors.success,
-                  ),
-                ),
-              ],
-              const SizedBox(height: SFSpacing.base),
-            ],
-          ),
-        ),
       ),
     );
   }
