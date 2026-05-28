@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -66,29 +67,6 @@ class CryptoEngine:
     @property
     def is_unlocked(self) -> bool:
         return self._key is not None
-
-    def mock_handshake(self) -> bool:
-        """Simulate a hardware-backed handshake to derive a session key.
-
-        We read a local "hardware secret", then derive an AES-256-GCM key using HKDF-SHA256.
-        The derived key is stored in a mutable bytearray so it can be wiped later.
-        """
-        secret = self._load_hardware_secret()
-
-        # If a previous session key exists, wipe it before deriving a new one.
-        if self._key is not None:
-            self.lock_vault()
-
-        # HKDF needs a random salt/nonce to model a one-time hardware handshake.
-        self._handshake_nonce = secrets.token_bytes(self.HKDF_NONCE_SIZE)
-
-        # HKDF returns bytes; we immediately move into bytearray for explicit wiping later.
-        # Note: cryptography will still handle key material internally; only our copy is wiped.
-        self._key = self._derive_key(secret, self._handshake_nonce)
-        self._aes_key = self._key
-        self._handshake_mode = "mock"
-        self._hardware_port = None
-        return True
 
     def hardware_handshake(self, com_port: str) -> bool:
         """Derive a session key using an ESP32 HMAC oracle over Serial.
@@ -155,8 +133,8 @@ class CryptoEngine:
 
         return dest_path
 
-    def encrypt_bytes_to_vault(self, data: bytes, filename: str, overwrite: bool = True) -> Path:
-        """Encrypt raw bytes and store them in the SecureFlow_Vault directory."""
+    def encrypt_bytes(self, data: bytes) -> bytes:
+        """Encrypt raw bytes and return the encrypted blob (SFV3)."""
         self._require_key()
         if self._handshake_nonce is None:
             raise CryptoEngineError("Handshake nonce missing. Perform hardware tap again.")
@@ -168,15 +146,7 @@ class CryptoEngine:
         ciphertext = aesgcm.encrypt(file_nonce, data, None)
 
         mode = self.MODE_HARDWARE if self._handshake_mode == "hardware" else self.MODE_MOCK
-
-        blob = self.VAULT_HEADER_V3 + mode + self._handshake_nonce + file_nonce + ciphertext
-
-        dest_path = self._vault_dir / filename
-        if not overwrite:
-            dest_path = self._unique_path(dest_path)
-
-        dest_path.write_bytes(blob)
-        return dest_path
+        return self.VAULT_HEADER_V3 + mode + self._handshake_nonce + file_nonce + ciphertext
 
     def decrypt_to_memory(self, enc_filepath: str | Path, com_port: Optional[str] = None) -> bytes:
         """Decrypt a .enc file into memory and return raw bytes.
@@ -372,20 +342,36 @@ class CryptoEngine:
         except Exception as exc:  # pragma: no cover - import failure depends on environment
             raise CryptoEngineError("pyserial is required for hardware handshake.") from exc
 
+        if len(nonce) != self.HKDF_NONCE_SIZE:
+            raise CryptoEngineError("Handshake nonce must be 32 bytes.")
+
         try:
-            with serial.Serial(com_port, 115200, timeout=2) as ser:
+            with serial.Serial(com_port, 115200, timeout=0.2, write_timeout=0.5) as ser:
                 ser.reset_input_buffer()
                 ser.reset_output_buffer()
                 ser.write(nonce)
                 ser.flush()
-                response = ser.read(self.HKDF_NONCE_SIZE)
+                response = self._read_exact(ser, self.HKDF_NONCE_SIZE, timeout=2.5)
         except serial.SerialException as exc:
             raise CryptoEngineError(f"Unable to open serial port: {com_port}") from exc
+        except serial.SerialTimeoutException as exc:
+            raise CryptoEngineError("ESP32 timed out while reading HMAC response.") from exc
 
         if len(response) != self.HKDF_NONCE_SIZE:
             raise CryptoEngineError("ESP32 did not return a full 32-byte HMAC response.")
 
         return response
+
+    def _read_exact(self, ser: "serial.Serial", size: int, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
+        buffer = bytearray()
+
+        while len(buffer) < size and time.monotonic() < deadline:
+            chunk = ser.read(size - len(buffer))
+            if chunk:
+                buffer.extend(chunk)
+
+        return bytes(buffer)
 
     def _wipe_key(self, key: Optional[bytearray]) -> None:
         if not key:

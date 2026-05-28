@@ -6,17 +6,10 @@ import json
 import time
 import gc
 import logging
-import uuid
-from tkinter import filedialog, messagebox, TclError
+from tkinter import filedialog, messagebox
 
-import queue
-import threading
 import customtkinter as ctk
 import fitz  # PyMuPDF
-import pyotp
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image
 
 from cloud_manager import CloudManager, CloudManagerError
@@ -26,41 +19,33 @@ from crypto_engine import CryptoEngine, CryptoEngineError
 logger = logging.getLogger(__name__)
 
 
-AUTH_STORE_FILENAME = "auth_keys.enc"
 PASSWORD_STORE_FILENAME = "passwords.enc"
-
-ML_MONITOR_INTERVAL_MS = 1500
-ML_BASELINE_MIN_SAMPLES = 120
-ML_ANOMALY_THRESHOLD = 0.6
-ML_ANOMALY_STREAK = 3
 
 
 COLORS = {
-    "bg":                 "#09090B",
-    "panel":              "#111113",
-    "panel_alt":          "#18181B",
-    "panel_alt_hover":    "#27272A",
-    "text":               "#FAFAFA",
-    "muted":              "#A1A1AA",
-    "accent":             "#818CF8",
-    "accent_hover":       "#6366F1",
-    "success":            "#34D399",
-    "danger":             "#F87171",
-    "danger_hover":       "#DC2626",
-    "border":             "#3F3F46",
-    "badge_bg":           "#1E1B4B",
-    "badge_inactive":     "#18181B",
-    "badge_text_inactive":"#52525B",
+    "bg": "#18181b",
+    "panel": "#27272a",
+    "panel_alt": "#1f1f22",
+    "panel_alt_hover": "#2d2d31",
+    "text": "#e4e4e7",
+    "muted": "#a1a1aa",
+    "accent": "#2563eb",
+    "accent_hover": "#1d4ed8",
+    "success": "#16a34a",
+    "danger": "#dc2626",
+    "danger_hover": "#b91c1c",
+    "border": "#3f3f46",
+    "badge_bg": "#2a2a2f",
+    "badge_border": "#42424a",
+    "badge_inactive": "#2f2f34",
+    "badge_text_inactive": "#8a8a94",
 }
 
 FONTS = {
-    "title":   ("Segoe UI Variable", 20, "bold"),
-    "section": ("Segoe UI Variable", 14, "bold"),
-    "status":  ("Segoe UI Variable", 16, "bold"),
-    "body":    ("Segoe UI Variable", 13),
-    "mono":    ("Consolas", 13),
-    "badge":   ("Consolas", 10, "bold"),
-    "totp":    ("Consolas", 42, "bold"),
+    "title": ("Segoe UI", 20, "bold"),
+    "section": ("Segoe UI", 14, "bold"),
+    "status": ("Segoe UI", 16, "bold"),
+    "body": ("Segoe UI", 12),
 }
 
 
@@ -83,28 +68,6 @@ class VaultGUI(ctk.CTk):
         self._hardware_monitor_id: str | None = None
         self._last_selected_object: tuple[str, str] | None = None
         self._password_store: dict[str, dict[str, str]] = {}
-        self._password_rows: list[ctk.CTkFrame] = []
-        self._totp_store: dict[str, dict[str, object]] = {}
-        self._totp_rows: list[ctk.CTkFrame] = []
-        self._totp_selected_id: str | None = None
-        self._totp_secret: str | None = None
-        self._totp_issuer = ""
-        self._totp_account = ""
-        self._totp_period = 30
-        self._totp_timer_id: str | None = None
-        self._totp_last_step = -1
-        self._ml_canvas: FigureCanvasTkAgg | None = None
-        self._ml_monitor_id: str | None = None
-        self._ml_last_file: Path | None = None
-        self._ml_last_row = 0
-        self._ml_baseline: list[list[float]] = []
-        self._ml_model = None
-        self._ml_anomaly_streak = 0
-        self._is_closing = False
-
-        # Thread-safe queue: bg threads post here, main thread drains every 50ms
-        self._ui_queue: queue.Queue = queue.Queue()
-        self._queue_pump_id = None
 
         self.title("SecureFlow Vault")
         self.geometry("1280x720")
@@ -112,65 +75,14 @@ class VaultGUI(ctk.CTk):
         self.configure(fg_color=COLORS["bg"])
 
         self._build_layout()
-        self._update_totp_status()
-        self._set_unlocked_state(self.crypto.is_unlocked,
-                                  message="Vault is locked. Hardware tap required.")
+        self._init_cloud()
+        self.refresh_vault_listing()
+        self._set_unlocked_state(self.crypto.is_unlocked, message="Vault is locked. Hardware tap required.")
 
-        self._process_ui_queue()  # start 50ms pump
-
-        self._run_in_thread(
-            self._init_cloud_bg,
-            on_done=lambda r: (setattr(self, "cloud", r), self.refresh_vault_listing()),
-            on_error=lambda e: (setattr(self, "cloud", None),
-                                self.refresh_vault_listing(),
-                                self._set_status_message(str(e), is_error=True))
-        )
-
-        self._schedule_after(300, self._auto_tap_on_launch)
-        self._start_totp_loop()
-        self._start_ml_monitor()
+        # Auto-tap on launch for demo convenience.
+        self.after(300, self._auto_tap_on_launch)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    # ------------------------------------------------------------------
-    # Threading infrastructure
-    # ------------------------------------------------------------------
-
-    def _run_in_thread(self, fn, on_done=None, on_error=None) -> None:
-        """Run *fn* in a daemon thread; deliver result via _ui_queue."""
-        def _worker():
-            try:
-                result = fn()
-                if on_done:
-                    self._ui_queue.put(("__done__", on_done, result))
-            except Exception as exc:  # noqa: BLE001
-                if on_error:
-                    self._ui_queue.put(("__error__", on_error, exc))
-                else:
-                    def _log(e, _x=exc):
-                        if "Hardware port" not in str(_x):
-                            logger.error("Thread error: %s", _x)
-                    self._ui_queue.put(("__error__", _log, exc))
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _process_ui_queue(self) -> None:
-        """Drain _ui_queue every 50 ms on the main thread."""
-        if self._is_closing:
-            return
-        try:
-            while True:
-                kind, cb, payload = self._ui_queue.get_nowait()
-                try:
-                    cb(payload)
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("Queue callback error: %s", exc)
-        except queue.Empty:
-            pass
-        self._queue_pump_id = self._schedule_after(50, self._process_ui_queue)
-
-    # ------------------------------------------------------------------
-    # Layout
-    # ------------------------------------------------------------------
 
     def _build_layout(self) -> None:
         self.grid_columnconfigure(0, weight=0)
@@ -180,11 +92,12 @@ class VaultGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, fg_color=COLORS["panel"], corner_radius=14)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
-        self.sidebar_frame.grid_rowconfigure(4, weight=1)
+        self.sidebar_frame.grid_rowconfigure(4, weight=3)
+        self.sidebar_frame.grid_rowconfigure(5, weight=1)
 
         ctk.CTkLabel(
             self.sidebar_frame,
-            text="SecureFlow",
+            text="SecureFlow Vault",
             font=FONTS["title"],
             text_color=COLORS["text"],
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 10))
@@ -238,9 +151,41 @@ class VaultGUI(ctk.CTk):
             border_color=COLORS["border"],
             command=self._on_encrypt_click,
         )
-        self.encrypt_button.grid(row=3, column=0, sticky="ew", padx=16, pady=6)
+        self.encrypt_button.grid(row=2, column=0, sticky="ew", padx=16, pady=6)
 
-        ctk.CTkFrame(self.sidebar_frame, fg_color="transparent").grid(row=4, column=0, sticky="nsew")
+        self.vault_header_row = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.vault_header_row.grid(row=3, column=0, sticky="ew", padx=16, pady=(18, 8))
+        self.vault_header_row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            self.vault_header_row,
+            text="Vault Browser",
+            font=FONTS["section"],
+            text_color=COLORS["muted"],
+        ).grid(row=0, column=0, sticky="w")
+
+        self.refresh_cloud_button = ctk.CTkButton(
+            self.vault_header_row,
+            text="Refresh Cloud",
+            width=120,
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=self.refresh_vault_listing,
+        )
+        self.refresh_cloud_button.grid(row=0, column=1, sticky="e")
+
+        self.vault_list_frame = ctk.CTkScrollableFrame(
+            self.sidebar_frame,
+            fg_color=COLORS["panel_alt"],
+            border_width=1,
+            border_color=COLORS["border"],
+        )
+        self.vault_list_frame.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 12))
+
+        ctk.CTkFrame(self.sidebar_frame, fg_color="transparent").grid(row=5, column=0, sticky="nsew")
 
         self.panic_button = ctk.CTkButton(
             self.sidebar_frame,
@@ -255,35 +200,10 @@ class VaultGUI(ctk.CTk):
         self.main_frame = ctk.CTkFrame(self, fg_color=COLORS["panel_alt"], corner_radius=14)
         self.main_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 16), pady=16)
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(2, weight=1)
 
-        self.tabview = ctk.CTkTabview(
-            self.main_frame,
-            fg_color=COLORS["panel_alt"],
-            segmented_button_fg_color=COLORS["panel"],
-            segmented_button_selected_color=COLORS["panel_alt"],
-            segmented_button_selected_hover_color=COLORS["panel_alt_hover"],
-            text_color=COLORS["text"],
-            text_color_disabled=COLORS["muted"],
-        )
-        self.tabview.grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
-
-        self.files_tab = self.tabview.add("Files")
-        self.passwords_tab = self.tabview.add("Passwords")
-        self.auth_tab = self.tabview.add("Authenticator")
-        self.ml_tab = self.tabview.add("ML Insights")
-
-        self._build_files_tab()
-        self._build_passwords_tab()
-        self._build_authenticator_tab()
-        self._build_ml_tab()
-
-    def _build_files_tab(self) -> None:
-        self.files_tab.grid_columnconfigure(0, weight=1)
-        self.files_tab.grid_rowconfigure(1, weight=1)
-
-        self.status_frame = ctk.CTkFrame(self.files_tab, fg_color=COLORS["panel"], corner_radius=12)
-        self.status_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        self.status_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["panel"], corner_radius=12)
+        self.status_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
         self.status_frame.grid_columnconfigure(0, weight=1)
 
         self.status_label = ctk.CTkLabel(
@@ -327,7 +247,7 @@ class VaultGUI(ctk.CTk):
 
         self.timeline_box = ctk.CTkTextbox(
             self.status_frame,
-            height=72,
+            height=110,
             fg_color=COLORS["panel_alt"],
             text_color=COLORS["text"],
             border_width=1,
@@ -337,51 +257,8 @@ class VaultGUI(ctk.CTk):
         self.timeline_box.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 12))
         self.timeline_box.configure(state="disabled")
 
-        self.files_body = ctk.CTkFrame(self.files_tab, fg_color="transparent")
-        self.files_body.grid(row=1, column=0, sticky="nsew")
-        self.files_body.grid_columnconfigure(0, weight=0)
-        self.files_body.grid_columnconfigure(1, weight=1)
-        self.files_body.grid_rowconfigure(0, weight=1)
-
-        self.file_panel = ctk.CTkFrame(self.files_body, fg_color=COLORS["panel"], corner_radius=12)
-        self.file_panel.grid(row=0, column=0, sticky="nsew", padx=(16, 12), pady=(0, 16))
-        self.file_panel.grid_columnconfigure(0, weight=1)
-        self.file_panel.grid_rowconfigure(1, weight=1)
-
-        self.vault_header_row = ctk.CTkFrame(self.file_panel, fg_color="transparent")
-        self.vault_header_row.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
-        self.vault_header_row.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            self.vault_header_row,
-            text="Vault Browser",
-            font=FONTS["section"],
-            text_color=COLORS["muted"],
-        ).grid(row=0, column=0, sticky="w")
-
-        self.refresh_cloud_button = ctk.CTkButton(
-            self.vault_header_row,
-            text="Refresh Cloud",
-            width=120,
-            fg_color=COLORS["panel_alt"],
-            hover_color=COLORS["panel_alt_hover"],
-            text_color=COLORS["text"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self.refresh_vault_listing,
-        )
-        self.refresh_cloud_button.grid(row=0, column=1, sticky="e")
-
-        self.vault_list_frame = ctk.CTkScrollableFrame(
-            self.file_panel,
-            fg_color=COLORS["panel_alt"],
-            border_width=1,
-            border_color=COLORS["border"],
-        )
-        self.vault_list_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-
-        self.viewer_frame = ctk.CTkFrame(self.files_body, fg_color=COLORS["panel"], corner_radius=12)
-        self.viewer_frame.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=(0, 16))
+        self.viewer_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["panel"], corner_radius=12)
+        self.viewer_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 16))
         self.viewer_frame.grid_columnconfigure(0, weight=1)
         self.viewer_frame.grid_rowconfigure(1, weight=1)
 
@@ -428,948 +305,18 @@ class VaultGUI(ctk.CTk):
         self.viewer_content.grid_columnconfigure(0, weight=1)
         self.viewer_content.grid_rowconfigure(0, weight=1)
 
-    def _build_passwords_tab(self) -> None:
-        self.passwords_tab.grid_columnconfigure(0, weight=1)
-        self.passwords_tab.grid_rowconfigure(1, weight=1)
-
-        form_frame = ctk.CTkFrame(self.passwords_tab, fg_color=COLORS["panel"], corner_radius=12)
-        form_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
-        form_frame.grid_columnconfigure(3, weight=1)
-
-        self.website_entry = ctk.CTkEntry(
-            form_frame,
-            placeholder_text="Website",
-            fg_color=COLORS["panel_alt"],
-            text_color=COLORS["text"],
-            border_color=COLORS["border"],
-            font=FONTS["mono"],
-        )
-        self.website_entry.grid(row=0, column=0, padx=12, pady=12, sticky="ew")
-
-        self.username_entry = ctk.CTkEntry(
-            form_frame,
-            placeholder_text="Username",
-            fg_color=COLORS["panel_alt"],
-            text_color=COLORS["text"],
-            border_color=COLORS["border"],
-            font=FONTS["mono"],
-        )
-        self.username_entry.grid(row=0, column=1, padx=12, pady=12, sticky="ew")
-
-        self.password_entry = ctk.CTkEntry(
-            form_frame,
-            placeholder_text="Password",
-            show="*",
-            fg_color=COLORS["panel_alt"],
-            text_color=COLORS["text"],
-            border_color=COLORS["border"],
-            font=FONTS["mono"],
-        )
-        self.password_entry.grid(row=0, column=2, padx=12, pady=12, sticky="ew")
-
-        add_button = ctk.CTkButton(
-            form_frame,
-            text="Add Password",
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            text_color=COLORS["text"],
-            command=self._on_add_password,
-        )
-        add_button.grid(row=0, column=3, padx=12, pady=12, sticky="e")
-
-        self.password_list_frame = ctk.CTkScrollableFrame(
-            self.passwords_tab,
-            fg_color=COLORS["panel"],
-            border_width=1,
-            border_color=COLORS["border"],
-        )
-        self.password_list_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.password_list_frame.grid_columnconfigure(0, weight=1)
-
-        header = ctk.CTkFrame(self.password_list_frame, fg_color="transparent")
-        header.pack(fill="x", padx=12, pady=(12, 6))
-        ctk.CTkLabel(header, text="Website", font=FONTS["mono"], text_color=COLORS["muted"]).grid(
-            row=0, column=0, sticky="w"
-        )
-        ctk.CTkLabel(header, text="Username", font=FONTS["mono"], text_color=COLORS["muted"]).grid(
-            row=0, column=1, sticky="w", padx=(24, 0)
-        )
-        ctk.CTkLabel(header, text="Password", font=FONTS["mono"], text_color=COLORS["muted"]).grid(
-            row=0, column=2, sticky="w", padx=(24, 0)
-        )
-        ctk.CTkLabel(header, text="Reveal", font=FONTS["mono"], text_color=COLORS["muted"]).grid(
-            row=0, column=3, sticky="w", padx=(24, 0)
-        )
-
-    def _build_authenticator_tab(self) -> None:
-        self.auth_tab.grid_columnconfigure(0, weight=1)
-        self.auth_tab.grid_rowconfigure(1, weight=1)
-
-        auth_frame = ctk.CTkFrame(self.auth_tab, fg_color=COLORS["panel"], corner_radius=12)
-        auth_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
-        auth_frame.grid_columnconfigure(0, weight=1)
-        auth_frame.grid_columnconfigure(1, weight=0)
-
-        ctk.CTkLabel(
-            auth_frame,
-            text="TOTP Authenticator",
-            font=FONTS["section"],
-            text_color=COLORS["muted"],
-        ).grid(row=0, column=0, sticky="w", padx=12, pady=(12, 6))
-
-        self.totp_label_entry = ctk.CTkEntry(
-            auth_frame,
-            placeholder_text="Label / Website (optional)",
-            fg_color=COLORS["panel_alt"],
-            text_color=COLORS["text"],
-            border_color=COLORS["border"],
-            font=FONTS["mono"],
-        )
-        self.totp_label_entry.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
-
-        self.totp_secret_entry = ctk.CTkEntry(
-            auth_frame,
-            placeholder_text="Paste Base32 secret or otpauth:// URI",
-            fg_color=COLORS["panel_alt"],
-            text_color=COLORS["text"],
-            border_color=COLORS["border"],
-            font=FONTS["mono"],
-        )
-        self.totp_secret_entry.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
-
-        controls = ctk.CTkFrame(auth_frame, fg_color="transparent")
-        controls.grid(row=2, column=1, padx=(0, 12), pady=(0, 12), sticky="e")
-
-        set_button = ctk.CTkButton(
-            controls,
-            text="Add Key",
-            width=100,
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            text_color=COLORS["text"],
-            command=self._apply_totp_secret,
-        )
-        set_button.grid(row=0, column=0, padx=(0, 8))
-
-        clear_button = ctk.CTkButton(
-            controls,
-            text="Remove",
-            width=80,
-            fg_color=COLORS["panel_alt"],
-            hover_color=COLORS["panel_alt_hover"],
-            text_color=COLORS["text"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._clear_totp_secret,
-        )
-        clear_button.grid(row=0, column=1)
-
-        self.totp_status_label = ctk.CTkLabel(
-            auth_frame,
-            text="No TOTP keys stored.",
-            font=FONTS["mono"],
-            text_color=COLORS["muted"],
-        )
-        self.totp_status_label.grid(row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 12))
-
-        self.auth_body = ctk.CTkFrame(self.auth_tab, fg_color="transparent")
-        self.auth_body.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.auth_body.grid_columnconfigure(0, weight=1)
-        self.auth_body.grid_columnconfigure(1, weight=1)
-        self.auth_body.grid_rowconfigure(0, weight=1)
-
-        self.totp_list_frame = ctk.CTkScrollableFrame(
-            self.auth_body,
-            fg_color=COLORS["panel"],
-            border_width=1,
-            border_color=COLORS["border"],
-        )
-        self.totp_list_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        self.totp_list_frame.grid_columnconfigure(0, weight=1)
-
-        self.totp_detail_frame = ctk.CTkFrame(self.auth_body, fg_color=COLORS["panel"], corner_radius=12)
-        self.totp_detail_frame.grid(row=0, column=1, sticky="nsew")
-        self.totp_detail_frame.grid_columnconfigure(0, weight=1)
-
-        self.totp_detail_title = ctk.CTkLabel(
-            self.totp_detail_frame,
-            text="Selected Key",
-            font=FONTS["section"],
-            text_color=COLORS["muted"],
-        )
-        self.totp_detail_title.grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
-
-        self.totp_detail_name = ctk.CTkLabel(
-            self.totp_detail_frame,
-            text="No key selected",
-            font=FONTS["body"],
-            text_color=COLORS["text"],
-        )
-        self.totp_detail_name.grid(row=1, column=0, sticky="w", padx=16)
-
-        self.totp_detail_meta = ctk.CTkLabel(
-            self.totp_detail_frame,
-            text="",
-            font=FONTS["mono"],
-            text_color=COLORS["muted"],
-        )
-        self.totp_detail_meta.grid(row=2, column=0, sticky="w", padx=16, pady=(2, 16))
-
-        self.totp_label = ctk.CTkLabel(
-            self.totp_detail_frame,
-            text="SELECT KEY",
-            font=FONTS["totp"],
-            text_color=COLORS["text"],
-        )
-        self.totp_label.grid(row=3, column=0, pady=(10, 16))
-
-        self.totp_progress = ctk.CTkProgressBar(
-            self.totp_detail_frame,
-            width=320,
-            height=12,
-            fg_color=COLORS["panel_alt"],
-            progress_color=COLORS["accent"],
-        )
-        self.totp_progress.grid(row=4, column=0, pady=(0, 24))
-        self.totp_progress.set(0.0)
-
-        self.totp_remove_button = ctk.CTkButton(
-            self.totp_detail_frame,
-            text="Remove Selected Key",
-            fg_color=COLORS["panel_alt"],
-            hover_color=COLORS["panel_alt_hover"],
-            text_color=COLORS["text"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._clear_totp_secret,
-        )
-        self.totp_remove_button.grid(row=5, column=0, padx=16, pady=(0, 16), sticky="ew")
-
-        self._render_totp_rows()
-
-    def _build_ml_tab(self) -> None:
-        self.ml_tab.grid_columnconfigure(0, weight=1)
-        self.ml_tab.grid_rowconfigure(1, weight=1)
-
-        header = ctk.CTkFrame(self.ml_tab, fg_color=COLORS["panel"], corner_radius=12)
-        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
-        header.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            header,
-            text="ML Insights",
-            font=FONTS["section"],
-            text_color=COLORS["muted"],
-        ).grid(row=0, column=0, sticky="w", padx=12, pady=12)
-
-        refresh_button = ctk.CTkButton(
-            header,
-            text="Refresh Data",
-            width=140,
-            fg_color=COLORS["panel_alt"],
-            hover_color=COLORS["panel_alt_hover"],
-            text_color=COLORS["text"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._refresh_ml_chart,
-        )
-        refresh_button.grid(row=0, column=1, sticky="e", padx=12, pady=12)
-
-        self.ml_chart_container = ctk.CTkFrame(self.ml_tab, fg_color=COLORS["panel"], corner_radius=12)
-        self.ml_chart_container.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.ml_chart_container.grid_columnconfigure(0, weight=1)
-        self.ml_chart_container.grid_rowconfigure(0, weight=1)
-
-        self._refresh_ml_chart()
-
     def _set_status_message(self, message: str, is_error: bool = False) -> None:
         color = COLORS["danger"] if is_error else COLORS["muted"]
         self.status_message.configure(text=message, text_color=color)
 
-    def _init_cloud_bg(self):
-        """Called in background thread. Returns a CloudManager instance."""
-        return CloudManager()
-
-    def _on_add_password(self) -> None:
-        website = self.website_entry.get().strip()
-        username = self.username_entry.get().strip()
-        password = self.password_entry.get().strip()
-
-        if not website or not username or not password:
-            messagebox.showerror("Passwords", "Website, username, and password are required.")
-            return
-
-        key = f"{website}|{username}"
-        self._password_store[key] = {
-            "website": website,
-            "username": username,
-            "password": password,
-        }
-
-        self.website_entry.delete(0, "end")
-        self.username_entry.delete(0, "end")
-        self.password_entry.delete(0, "end")
-
-        self._render_password_rows()
-        self._save_passwords_to_vault()
-
-    def _render_password_rows(self) -> None:
-        for row in self._password_rows:
-            row.destroy()
-        self._password_rows.clear()
-
-        for entry in self._password_store.values():
-            row = ctk.CTkFrame(self.password_list_frame, fg_color="transparent")
-            row.pack(fill="x", padx=12, pady=6)
-
-            ctk.CTkLabel(row, text=entry["website"], font=FONTS["mono"], text_color=COLORS["text"]).grid(
-                row=0, column=0, sticky="w"
-            )
-            ctk.CTkLabel(row, text=entry["username"], font=FONTS["mono"], text_color=COLORS["text"]).grid(
-                row=0, column=1, sticky="w", padx=(24, 0)
-            )
-
-            password_label = ctk.CTkLabel(
-                row,
-                text="******",
-                font=FONTS["mono"],
-                text_color=COLORS["text"],
-            )
-            password_label.grid(row=0, column=2, sticky="w", padx=(24, 0))
-
-            state = {"visible": False}
-
-            def toggle() -> None:
-                state["visible"] = not state["visible"]
-                if state["visible"]:
-                    password_label.configure(text=entry["password"])
-                    reveal_button.configure(text="Hide")
-                else:
-                    password_label.configure(text="******")
-                    reveal_button.configure(text="Reveal")
-
-            reveal_button = ctk.CTkButton(
-                row,
-                text="Reveal",
-                width=80,
-                fg_color=COLORS["panel_alt"],
-                hover_color=COLORS["panel_alt_hover"],
-                text_color=COLORS["text"],
-                border_width=1,
-                border_color=COLORS["border"],
-                command=toggle,
-            )
-            reveal_button.grid(row=0, column=3, sticky="w", padx=(24, 0))
-
-            self._password_rows.append(row)
-
-    def _load_passwords_from_vault(self) -> None:
-        if not self.crypto.is_unlocked:
-            return
-
-        vault_path = self.crypto.vault_dir / PASSWORD_STORE_FILENAME
-        if not vault_path.is_file():
-            self._password_store.clear()
-            self._render_password_rows()
-            return
-
-        port = self._hardware_port or self.port_entry.get().strip()
+    def _init_cloud(self) -> None:
         try:
-            raw = self.crypto.decrypt_to_memory(vault_path, com_port=port)
-            data = json.loads(raw.decode("utf-8"))
-        except Exception as exc:
-            self._set_status_message("Failed to load passwords.", is_error=True)
-            self._log_event(f"Failed to load passwords: {exc}")
-            logger.warning("Failed to load passwords: %s", exc)
-            return
-
-        self._password_store.clear()
-        if isinstance(data, dict):
-            for key, entry in data.items():
-                if not isinstance(entry, dict):
-                    continue
-                website = str(entry.get("website") or "")
-                username = str(entry.get("username") or "")
-                password = str(entry.get("password") or "")
-                if not website or not username:
-                    continue
-                self._password_store[key] = {
-                    "website": website,
-                    "username": username,
-                    "password": password,
-                }
-        elif isinstance(data, list):
-            for entry in data:
-                if not isinstance(entry, dict):
-                    continue
-                website = str(entry.get("website") or "")
-                username = str(entry.get("username") or "")
-                password = str(entry.get("password") or "")
-                if not website or not username:
-                    continue
-                key = f"{website}|{username}"
-                self._password_store[key] = {
-                    "website": website,
-                    "username": username,
-                    "password": password,
-                }
-
-        self._render_password_rows()
-
-    def _save_passwords_to_vault(self) -> None:
-        if not self.crypto.is_unlocked:
-            return
-
-        vault_path = self.crypto.vault_dir / PASSWORD_STORE_FILENAME
-        if not self._password_store:
-            if vault_path.exists():
-                vault_path.unlink()
-            return
-
-        payload = []
-        for entry in self._password_store.values():
-            payload.append(
-                {
-                    "website": entry.get("website", ""),
-                    "username": entry.get("username", ""),
-                    "password": entry.get("password", ""),
-                }
-            )
-
-        blob = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        try:
-            self.crypto.encrypt_bytes_to_vault(blob, PASSWORD_STORE_FILENAME, overwrite=True)
-        except CryptoEngineError as exc:
+            self.cloud = CloudManager()
+        except CloudManagerError as exc:
+            self.cloud = None
             self._set_status_message(str(exc), is_error=True)
-            self._log_event(f"Failed to save passwords: {exc}")
-            logger.warning("Failed to save passwords: %s", exc)
-
-    def _clear_passwords_memory(self) -> None:
-        self._password_store.clear()
-        self._render_password_rows()
-
-    def _update_totp_status(self) -> None:
-        if not self.crypto.is_unlocked:
-            self.totp_status_label.configure(text="Unlock the vault to view authenticator keys.")
-            return
-        count = len(self._totp_store)
-        if count == 0:
-            text = "No TOTP keys stored."
-        elif count == 1:
-            text = "1 TOTP key stored."
-        else:
-            text = f"{count} TOTP keys stored."
-        self.totp_status_label.configure(text=text)
-
-    def _render_totp_rows(self) -> None:
-        for child in self.totp_list_frame.winfo_children():
-            child.destroy()
-        self._totp_rows.clear()
-
-        if not self.crypto.is_unlocked:
-            ctk.CTkLabel(
-                self.totp_list_frame,
-                text="Unlock the vault to view keys.",
-                font=FONTS["mono"],
-                text_color=COLORS["muted"],
-            ).pack(fill="x", padx=12, pady=12)
-            return
-
-        if not self._totp_store:
-            ctk.CTkLabel(
-                self.totp_list_frame,
-                text="No keys yet.",
-                font=FONTS["mono"],
-                text_color=COLORS["muted"],
-            ).pack(fill="x", padx=12, pady=12)
-            return
-
-        entries = sorted(
-            self._totp_store.items(),
-            key=lambda item: str(item[1].get("label", "")).lower(),
-        )
-        for key_id, entry in entries:
-            label = str(entry.get("label") or "Unnamed key")
-            issuer = str(entry.get("issuer") or "")
-            account = str(entry.get("account") or "")
-            meta = " | ".join([part for part in (issuer, account) if part])
-            is_selected = key_id == self._totp_selected_id
-
-            row = ctk.CTkFrame(
-                self.totp_list_frame,
-                fg_color=COLORS["panel_alt"] if is_selected else "transparent",
-                corner_radius=8,
-            )
-            row.pack(fill="x", padx=12, pady=6)
-            row.grid_columnconfigure(0, weight=1)
-
-            ctk.CTkLabel(
-                row,
-                text=label,
-                font=FONTS["body"],
-                text_color=COLORS["text"],
-            ).grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
-
-            ctk.CTkLabel(
-                row,
-                text=meta,
-                font=FONTS["mono"],
-                text_color=COLORS["muted"],
-            ).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 8))
-
-            ctk.CTkButton(
-                row,
-                text="View",
-                width=70,
-                fg_color=COLORS["panel_alt"],
-                hover_color=COLORS["panel_alt_hover"],
-                text_color=COLORS["text"],
-                border_width=1,
-                border_color=COLORS["border"],
-                command=lambda k=key_id: self._select_totp_key(k),
-            ).grid(row=0, column=1, rowspan=2, padx=8, pady=8, sticky="e")
-
-            self._totp_rows.append(row)
-
-    def _select_totp_key(self, key_id: str) -> None:
-        entry = self._totp_store.get(key_id)
-        if not entry:
-            return
-
-        self._totp_selected_id = key_id
-        self._totp_secret = str(entry.get("secret") or "")
-        self._totp_issuer = str(entry.get("issuer") or "")
-        self._totp_account = str(entry.get("account") or "")
-        self._totp_period = int(entry.get("period") or 30)
-        self._totp_last_step = -1
-
-        label = str(entry.get("label") or "Unnamed key")
-        meta = " | ".join([part for part in (self._totp_issuer, self._totp_account) if part])
-        self.totp_detail_name.configure(text=label)
-        self.totp_detail_meta.configure(text=meta)
-
-        self._render_totp_rows()
-        self._update_totp()
-
-    def _clear_totp_memory(self) -> None:
-        self._totp_store.clear()
-        self._totp_selected_id = None
-        self._totp_secret = None
-        self._totp_issuer = ""
-        self._totp_account = ""
-        self._totp_period = 30
-        self._totp_last_step = -1
-
-        self.totp_detail_name.configure(text="No key selected")
-        self.totp_detail_meta.configure(text="")
-        self.totp_label.configure(text="SELECT KEY")
-        self.totp_progress.set(0.0)
-
-        self._render_totp_rows()
-        self._update_totp_status()
-
-    def _save_totp_store_to_vault(self) -> None:
-        if not self.crypto.is_unlocked:
-            return
-
-        vault_path = self.crypto.vault_dir / AUTH_STORE_FILENAME
-        if not self._totp_store:
-            if vault_path.exists():
-                vault_path.unlink()
-            return
-
-        payload = []
-        for key_id, entry in self._totp_store.items():
-            payload.append(
-                {
-                    "id": key_id,
-                    "label": entry.get("label", ""),
-                    "issuer": entry.get("issuer", ""),
-                    "account": entry.get("account", ""),
-                    "secret": entry.get("secret", ""),
-                    "period": int(entry.get("period", 30)),
-                }
-            )
-
-        blob = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        try:
-            self.crypto.encrypt_bytes_to_vault(blob, AUTH_STORE_FILENAME, overwrite=True)
-        except CryptoEngineError as exc:
-            self._set_status_message(str(exc), is_error=True)
-            self._log_event(f"Failed to save authenticator keys: {exc}")
-            logger.warning("Failed to save authenticator keys: %s", exc)
-
-    def _load_totp_store_from_vault(self) -> None:
-        if not self.crypto.is_unlocked:
-            return
-
-        vault_path = self.crypto.vault_dir / AUTH_STORE_FILENAME
-        if not vault_path.is_file():
-            self._update_totp_status()
-            return
-
-        port = self._hardware_port or self.port_entry.get().strip()
-        try:
-            raw = self.crypto.decrypt_to_memory(vault_path, com_port=port)
-            data = json.loads(raw.decode("utf-8"))
-        except Exception as exc:
-            self._set_status_message("Failed to load authenticator keys.", is_error=True)
-            self._log_event(f"Failed to load authenticator keys: {exc}")
-            logger.warning("Failed to load authenticator keys: %s", exc)
-            return
-
-        self._totp_store.clear()
-        if isinstance(data, list):
-            for entry in data:
-                if not isinstance(entry, dict):
-                    continue
-                secret = entry.get("secret")
-                if not secret:
-                    continue
-                key_id = entry.get("id") or uuid.uuid4().hex
-                self._totp_store[key_id] = {
-                    "label": entry.get("label", ""),
-                    "issuer": entry.get("issuer", ""),
-                    "account": entry.get("account", ""),
-                    "secret": secret,
-                    "period": int(entry.get("period", 30)),
-                }
-
-        if self._totp_store:
-            first_id = next(iter(self._totp_store))
-            self._select_totp_key(first_id)
-        else:
-            self._clear_totp_memory()
-
-        self._update_totp_status()
-
-    def _start_ml_monitor(self) -> None:
-        if self._ml_monitor_id is not None:
-            self.after_cancel(self._ml_monitor_id)
-        self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-
-    def _stop_ml_monitor(self) -> None:
-        if self._ml_monitor_id is not None:
-            self.after_cancel(self._ml_monitor_id)
-            self._ml_monitor_id = None
-
-    def _monitor_ml_anomalies(self) -> None:
-        if self._is_closing:
-            return
-        try:
-            if not self.winfo_exists():
-                return
-        except TclError:
-            return
-
-        csv_path = self._find_latest_telemetry_file()
-        if not csv_path:
-            self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-            return
-
-        try:
-            df = pd.read_csv(csv_path)
-        except Exception:
-            self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-            return
-
-        if self._ml_last_file != csv_path:
-            self._ml_last_file = csv_path
-            self._ml_last_row = 0
-
-        if self._ml_last_row >= len(df):
-            self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-            return
-
-        new_df = df.iloc[self._ml_last_row :].copy()
-        self._ml_last_row = len(df)
-
-        features = self._extract_ml_features(new_df)
-        if not features:
-            self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-            return
-
-        if self._ml_model is None:
-            self._ml_baseline.extend(features)
-            if len(self._ml_baseline) >= ML_BASELINE_MIN_SAMPLES:
-                self._train_ml_model()
-            self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-            return
-
-        scores = -self._ml_model.decision_function(features)
-        max_score = float(max(scores))
-        if max_score >= ML_ANOMALY_THRESHOLD:
-            self._ml_anomaly_streak += 1
-        else:
-            self._ml_anomaly_streak = 0
-
-        if self._ml_anomaly_streak >= ML_ANOMALY_STREAK and self.crypto.is_unlocked:
-            self._lock_due_to_ml(max_score)
-            self._ml_anomaly_streak = 0
-
-        self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
-
-    def _extract_ml_features(self, df: pd.DataFrame) -> list[list[float]]:
-        if {"Dwell_Time", "Flight_Time"}.issubset(df.columns):
-            dwell = pd.to_numeric(df["Dwell_Time"], errors="coerce")
-            flight = pd.to_numeric(df["Flight_Time"], errors="coerce")
-            outlier = df["Outlier"] if "Outlier" in df.columns else pd.Series([False] * len(df), index=df.index)
-            outlier_mask = outlier.astype(str).str.lower().isin(["true", "1", "yes"])
-            valid = ~outlier_mask
-        elif {"dwell_time", "flight_time"}.issubset(df.columns):
-            dwell = pd.to_numeric(df["dwell_time"], errors="coerce")
-            flight = pd.to_numeric(df["flight_time"], errors="coerce")
-            valid = pd.Series([True] * len(df), index=df.index)
-        else:
-            return []
-
-        valid = valid & dwell.notna() & flight.notna()
-        if not valid.any():
-            return []
-
-        features = []
-        for dwell_val, flight_val in zip(dwell[valid].tolist(), flight[valid].tolist()):
-            features.append([float(dwell_val), float(flight_val)])
-        return features
-
-    def _train_ml_model(self) -> None:
-        try:
-            from sklearn.ensemble import IsolationForest
-        except Exception as exc:
-            self._set_status_message("scikit-learn not installed. ML guard disabled.", is_error=True)
-            logger.warning("ML monitor disabled: %s", exc)
-            self._ml_baseline.clear()
-            return
-
-        model = IsolationForest(
-            n_estimators=200,
-            contamination=0.05,
-            random_state=42,
-        )
-        model.fit(self._ml_baseline)
-        self._ml_model = model
-        self._ml_baseline.clear()
-        self._log_event("ML baseline trained. Behavioral guard active.")
-
-    def _lock_due_to_ml(self, score: float) -> None:
-        if not self.crypto.is_unlocked:
-            return
-        self.crypto.lock_vault()
-        self._hardware_port = ""
-        self._set_unlocked_state(False, message="Behavioral anomaly detected. Vault locked.", is_error=True)
-        self._log_event(f"ML anomaly score {score:.3f} exceeded threshold. Vault locked.")
-
-    def _start_totp_loop(self) -> None:
-        if self._totp_timer_id is not None:
-            self.after_cancel(self._totp_timer_id)
-        self._update_totp()
-
-    def _update_totp(self) -> None:
-        if self._is_closing:
-            return
-        try:
-            if not self.winfo_exists():
-                return
-        except TclError:
-            return
-
-        if not self.crypto.is_unlocked:
-            self.totp_label.configure(text="LOCKED")
-            self.totp_progress.set(0.0)
-            self._totp_timer_id = self._schedule_after(800, self._update_totp)
-            return
-
-        if not self._totp_secret:
-            self.totp_label.configure(text="SELECT KEY")
-            self.totp_progress.set(0.0)
-            self._totp_timer_id = self._schedule_after(500, self._update_totp)
-            return
-
-        totp = pyotp.TOTP(self._totp_secret, interval=self._totp_period)
-        now = int(time.time())
-        step = now // self._totp_period
-
-        if step != self._totp_last_step:
-            code = totp.now()
-            self.totp_label.configure(text=f"{code[:3]} {code[3:]}")
-            self._totp_last_step = step
-
-        remaining = self._totp_period - (now % self._totp_period)
-        self.totp_progress.set(remaining / self._totp_period)
-
-        self._totp_timer_id = self._schedule_after(200, self._update_totp)
-
-    def _apply_totp_secret(self) -> None:
-        if not self.crypto.is_unlocked:
-            messagebox.showerror("Authenticator", "Unlock the vault before adding keys.")
-            return
-
-        raw = self.totp_secret_entry.get().strip()
-        if not raw:
-            messagebox.showerror("Authenticator", "Paste a Base32 secret or otpauth:// URI.")
-            return
-
-        try:
-            if raw.lower().startswith("otpauth://"):
-                otp = pyotp.parse_uri(raw)
-                if not hasattr(otp, "interval"):
-                    raise ValueError("Only TOTP keys are supported.")
-                secret = otp.secret
-                issuer = getattr(otp, "issuer", "") or ""
-                account = getattr(otp, "name", "") or ""
-                period = int(getattr(otp, "interval", 30) or 30)
-            else:
-                secret = raw.replace(" ", "")
-                pyotp.TOTP(secret).now()
-                issuer = ""
-                account = ""
-                period = 30
-        except Exception as exc:
-            messagebox.showerror("Authenticator", f"Invalid secret or URI: {exc}")
-            return
-
-        label = self.totp_label_entry.get().strip()
-        if not label:
-            label = issuer or account or "TOTP Key"
-
-        key_id = uuid.uuid4().hex
-        self._totp_store[key_id] = {
-            "label": label,
-            "issuer": issuer,
-            "account": account,
-            "secret": secret,
-            "period": period,
-        }
-
-        self.totp_label_entry.delete(0, "end")
-        self.totp_secret_entry.delete(0, "end")
-
-        self._select_totp_key(key_id)
-        self._update_totp_status()
-        self._save_totp_store_to_vault()
-
-    def _clear_totp_secret(self) -> None:
-        if not self.crypto.is_unlocked:
-            messagebox.showerror("Authenticator", "Unlock the vault before removing keys.")
-            return
-
-        if not self._totp_selected_id:
-            messagebox.showinfo("Authenticator", "Select a key to remove.")
-            return
-
-        self._totp_store.pop(self._totp_selected_id, None)
-        self._totp_selected_id = None
-        self._totp_secret = None
-        self._totp_issuer = ""
-        self._totp_account = ""
-        self._totp_period = 30
-        self._totp_last_step = -1
-
-        if self._totp_store:
-            first_id = next(iter(self._totp_store))
-            self._select_totp_key(first_id)
-        else:
-            self.totp_detail_name.configure(text="No key selected")
-            self.totp_detail_meta.configure(text="")
-            self.totp_label.configure(text="SELECT KEY")
-            self.totp_progress.set(0.0)
-
-        self._render_totp_rows()
-        self._update_totp_status()
-        self._save_totp_store_to_vault()
-
-    def _refresh_ml_chart(self) -> None:
-        for child in self.ml_chart_container.winfo_children():
-            child.destroy()
-        if self._ml_canvas is not None:
-            self._ml_canvas.get_tk_widget().destroy()
-            self._ml_canvas = None
-
-        csv_path = self._find_latest_telemetry_file()
-        if not csv_path:
-            ctk.CTkLabel(
-                self.ml_chart_container,
-                text="No telemetry CSV found.",
-                font=FONTS["mono"],
-                text_color=COLORS["muted"],
-            ).grid(row=0, column=0, padx=16, pady=16)
-            return
-
-        df = pd.read_csv(csv_path)
-        if df.empty:
-            ctk.CTkLabel(
-                self.ml_chart_container,
-                text="No telemetry data available.",
-                font=FONTS["mono"],
-                text_color=COLORS["muted"],
-            ).grid(row=0, column=0, padx=16, pady=16)
-            return
-
-        # Map SecureFlow logger columns into the chart schema.
-        if {"Dwell_Time", "Flight_Time", "Outlier"}.issubset(df.columns):
-            dwell = pd.to_numeric(df["Dwell_Time"], errors="coerce")
-            flight = pd.to_numeric(df["Flight_Time"], errors="coerce")
-            outlier = df["Outlier"].astype(str).str.lower().isin(["true", "1", "yes"])
-            anomaly = outlier.astype(int)
-            x_axis = df.index
-        else:
-            dwell = pd.to_numeric(df.get("dwell_time", pd.Series(dtype=float)), errors="coerce")
-            flight = pd.to_numeric(df.get("flight_time", pd.Series(dtype=float)), errors="coerce")
-            anomaly = pd.to_numeric(df.get("anomaly_score", pd.Series(dtype=float)), errors="coerce")
-            x_axis = df.get("timestamp", df.index)
-
-        plt.rcParams.update({"font.family": "Consolas"})
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7, 6), dpi=100)
-        fig.patch.set_facecolor(COLORS["panel"])
-
-        ax1.set_facecolor(COLORS["panel_alt"])
-        ax2.set_facecolor(COLORS["panel_alt"])
-
-        ax1.plot(x_axis, dwell, label="dwell", color="#60a5fa")
-        ax1.plot(x_axis, flight, label="flight", color="#34d399")
-        ax1.set_title("Dwell/Flight Time", color=COLORS["text"])
-        ax1.tick_params(axis="x", colors=COLORS["muted"])
-        ax1.tick_params(axis="y", colors=COLORS["muted"])
-        ax1.legend(facecolor=COLORS["panel"], edgecolor=COLORS["border"], labelcolor=COLORS["text"])
-
-        ax2.bar(x_axis, anomaly, color="#f97316")
-        ax2.set_title("Anomaly Score", color=COLORS["text"])
-        ax2.tick_params(axis="x", colors=COLORS["muted"])
-        ax2.tick_params(axis="y", colors=COLORS["muted"])
-
-        fig.tight_layout(pad=2)
-
-        self._ml_canvas = FigureCanvasTkAgg(fig, master=self.ml_chart_container)
-        self._ml_canvas.draw()
-        self._ml_canvas.get_tk_widget().pack(fill="both", expand=True)
-
-    def _find_latest_telemetry_file(self) -> Path | None:
-        candidates = sorted(Path(".").glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not candidates:
-            return None
-
-        for path in candidates:
-            try:
-                sample = pd.read_csv(path, nrows=2)
-            except Exception:
-                continue
-
-            if {"Dwell_Time", "Flight_Time", "Outlier"}.issubset(sample.columns):
-                return path
-            if {"timestamp", "dwell_time", "flight_time", "anomaly_score"}.issubset(sample.columns):
-                return path
-
-        return None
-
-    def _schedule_after(self, delay_ms: int, callback) -> str | None:
-        if self._is_closing:
-            return None
-        try:
-            if not self.winfo_exists():
-                return None
-            return self.after(delay_ms, callback)
-        except TclError:
-            return None
+            messagebox.showerror("Cloud Setup", str(exc))
+            logger.exception("Cloud initialization failed")
 
     def _build_badge(self, parent: ctk.CTkFrame, text: str) -> ctk.CTkLabel:
         return ctk.CTkLabel(
@@ -1440,10 +387,97 @@ class VaultGUI(ctk.CTk):
             self._set_badge_state(self.badge_hkdf, False)
             self._clear_viewer("Vault is locked. No data in memory.")
             self._clear_passwords_memory()
-            self._clear_totp_memory()
 
         if message:
             self._set_status_message(message, is_error=is_error)
+
+    def _save_passwords_to_vault(self) -> None:
+        if not self.crypto.is_unlocked:
+            return
+
+        vault_path = self.crypto.vault_dir / PASSWORD_STORE_FILENAME
+        if not self._password_store:
+            if vault_path.exists():
+                vault_path.unlink()
+            return
+
+        payload: dict[str, dict[str, str]] = {}
+        for key, entry in self._password_store.items():
+            row = {
+                "website": str(entry.get("website") or ""),
+                "username": str(entry.get("username") or ""),
+                "password": str(entry.get("password") or ""),
+            }
+            if "notes" in entry and entry.get("notes") is not None:
+                row["notes"] = str(entry.get("notes"))
+            payload[str(key)] = row
+
+        blob = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        try:
+            encrypted = self.crypto.encrypt_bytes(blob)
+            vault_path.write_bytes(encrypted)
+        except CryptoEngineError as exc:
+            self._set_status_message(str(exc), is_error=True)
+            self._log_event(f"Failed to save passwords: {exc}")
+            logger.warning("Failed to save passwords: %s", exc)
+
+    def _load_passwords_from_vault(self) -> None:
+        if not self.crypto.is_unlocked:
+            return
+
+        vault_path = self.crypto.vault_dir / PASSWORD_STORE_FILENAME
+        if not vault_path.is_file():
+            self._password_store.clear()
+            return
+
+        port = self._hardware_port or self.port_entry.get().strip()
+        try:
+            raw = self.crypto.decrypt_to_memory(vault_path, com_port=port)
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            self._set_status_message("Failed to load passwords.", is_error=True)
+            self._log_event(f"Failed to load passwords: {exc}")
+            logger.warning("Failed to load passwords: %s", exc)
+            return
+
+        self._password_store.clear()
+        if isinstance(data, dict):
+            for key, entry in data.items():
+                if not isinstance(entry, dict):
+                    continue
+                website = str(entry.get("website") or "")
+                username = str(entry.get("username") or "")
+                password = str(entry.get("password") or "")
+                if not website or not username:
+                    continue
+                normalized_key = str(key) if key else f"{website}|{username}"
+                self._password_store[normalized_key] = {
+                    "website": website,
+                    "username": username,
+                    "password": password,
+                }
+                if "notes" in entry and entry.get("notes") is not None:
+                    self._password_store[normalized_key]["notes"] = str(entry.get("notes"))
+        elif isinstance(data, list):
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                website = str(entry.get("website") or "")
+                username = str(entry.get("username") or "")
+                password = str(entry.get("password") or "")
+                if not website or not username:
+                    continue
+                key = f"{website}|{username}"
+                self._password_store[key] = {
+                    "website": website,
+                    "username": username,
+                    "password": password,
+                }
+                if "notes" in entry and entry.get("notes") is not None:
+                    self._password_store[key]["notes"] = str(entry.get("notes"))
+
+    def _clear_passwords_memory(self) -> None:
+        self._password_store.clear()
 
     def _on_handshake_click(self) -> None:
         port = self.port_entry.get().strip()
@@ -1459,7 +493,6 @@ class VaultGUI(ctk.CTk):
             self._log_event("Hardware tap accepted. HKDF key derived in RAM.")
 
             self.refresh_vault_listing()
-            self._load_totp_store_from_vault()
             self._load_passwords_from_vault()
 
             # Auto-open the last selection, then fallback to local, then cloud.
@@ -1571,9 +604,10 @@ class VaultGUI(ctk.CTk):
 
         enc_files = sorted(self.crypto.vault_dir.glob("*.enc"))
         for path in enc_files:
-            if path.name in {AUTH_STORE_FILENAME, PASSWORD_STORE_FILENAME}:
+            if path.name == PASSWORD_STORE_FILENAME:
                 continue
-            self._add_vault_button(path.name, "local", str(path))
+            label = f"LOCAL | {path.name}"
+            self._add_vault_button(label, "local", str(path))
             items_added += 1
 
         if self.cloud:
@@ -1586,7 +620,8 @@ class VaultGUI(ctk.CTk):
             else:
                 enc_objects = [name for name in objects if name.lower().endswith(".enc")]
                 for name in enc_objects:
-                    self._add_vault_button(name, "cloud", name)
+                    label = f"CLOUD | {name}"
+                    self._add_vault_button(label, "cloud", name)
                     items_added += 1
 
         if items_added == 0:
@@ -1730,18 +765,8 @@ class VaultGUI(ctk.CTk):
 
     def _on_close(self) -> None:
         # Always wipe key material when exiting.
-        self._is_closing = True
         self.crypto.lock_vault()
         self._stop_hardware_monitor()
-        self._stop_ml_monitor()
-        for _attr in ("_totp_timer_id", "_queue_pump_id"):
-            _aid = getattr(self, _attr, None)
-            if _aid:
-                try:
-                    self.after_cancel(_aid)
-                except Exception:
-                    pass
-                setattr(self, _attr, None)
         self.destroy()
 
     def _get_latest_local_object(self) -> tuple[str, str] | None:
@@ -1772,11 +797,8 @@ class VaultGUI(ctk.CTk):
         return ("cloud", enc_objects[-1])
 
     def _add_vault_button(self, label: str, source: str, identifier: str) -> None:
-        row = ctk.CTkFrame(self.vault_list_frame, fg_color="transparent")
-        row.grid_columnconfigure(0, weight=1)
-
         button = ctk.CTkButton(
-            row,
+            self.vault_list_frame,
             text=label,
             anchor="w",
             fg_color=COLORS["panel"],
@@ -1784,36 +806,14 @@ class VaultGUI(ctk.CTk):
             text_color=COLORS["text"],
             command=lambda s=source, i=identifier: self._open_encrypted_file(s, i),
         )
-        button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-
-        badge_text = "LOCAL" if source == "local" else "CLOUD"
-        if source == "local":
-            badge_fg = COLORS["badge_inactive"]
-            badge_text_color = COLORS["badge_text_inactive"]
-        else:
-            badge_fg = COLORS["badge_bg"]
-            badge_text_color = COLORS["text"]
-
-        badge = ctk.CTkLabel(
-            row,
-            text=badge_text,
-            font=FONTS["badge"],
-            text_color=badge_text_color,
-            fg_color=badge_fg,
-            corner_radius=10,
-            padx=8,
-            pady=2,
-        )
-        badge.grid(row=0, column=1, sticky="e")
-
         state = "normal" if self.crypto.is_unlocked else "disabled"
         button.configure(state=state)
-        row.pack(fill="x", padx=8, pady=4)
+        button.pack(fill="x", padx=8, pady=4)
         self._file_buttons.append(button)
 
     def _start_hardware_monitor(self) -> None:
         self._stop_hardware_monitor()
-        self._hardware_monitor_id = self._schedule_after(1500, self._check_hardware_connection)
+        self._hardware_monitor_id = self.after(1500, self._check_hardware_connection)
 
     def _stop_hardware_monitor(self) -> None:
         if self._hardware_monitor_id is not None:
@@ -1839,4 +839,4 @@ class VaultGUI(ctk.CTk):
             self._hardware_monitor_id = None
             return
 
-        self._hardware_monitor_id = self._schedule_after(1500, self._check_hardware_connection)
+        self._hardware_monitor_id = self.after(1500, self._check_hardware_connection)

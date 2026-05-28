@@ -156,8 +156,24 @@ class SessionNotifier extends StateNotifier<SessionState> {
   }
 
   Future<bool> _performMockHandshake() async {
-    // Priority 1: use the desktop shared secret (content of mock_hardware_secret.txt)
-    // This is what makes mobile decrypt files that were encrypted on the desktop.
+    // Priority 1: use the Master Vault Key (MVK) paired via QR.
+    final mvk = await _storage.loadMvkBytes();
+    if (mvk != null) {
+      sfLog('Session: using MVK (${mvk.length}B) for handshake');
+      try {
+        _crypto.mockHandshake(mvk);
+        sfLog('Session: MVK handshake ok');
+        _setUnlocked(authMethod: 'biometric');
+        return true;
+      } on CryptoServiceException catch (e) {
+        sfLog('Session: MVK handshake error=${e.message}');
+        state = state.copyWith(isLoading: false, statusMessage: e.message, isError: true);
+        return false;
+      }
+    }
+
+    // Priority 2: use the desktop shared secret (content of mock_hardware_secret.txt)
+    // This is what makes mobile decrypt files that were encrypted on the desktop (legacy).
     final desktopSecret = await _storage.loadDesktopSecretBytes();
     if (desktopSecret != null) {
       sfLog('Session: using desktop shared secret (${desktopSecret.length}B) for handshake');
@@ -173,7 +189,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
       }
     }
 
-    // Priority 2: use the stored random mobile secret (mobile-only vault, no desktop link).
+    // Priority 3: use the stored random mobile secret (mobile-only vault, no desktop link).
     var secret = await _storage.loadMockHardwareSecret();
     if (secret == null) {
       sfLog('Session: no secret found — generating random mobile secret');

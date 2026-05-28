@@ -19,6 +19,7 @@ class SecureStorageService {
   static const _kS3Bucket        = 'sf_s3_bucket_name';
   static const _kMockHardware    = 'sf_mock_hardware_secret';
   static const _kDesktopSecret   = 'sf_desktop_shared_secret'; // UTF-8 of mock_hardware_secret.txt
+  static const _kMasterVaultKey  = 'sf_master_vault_key';      // MVK (base64)
   static const _kNfcExpected     = 'sf_nfc_expected_secret';      // bytes (legacy)
   static const _kNfcExpectedStr  = 'sf_nfc_expected_string';      // plain UTF-8
   static const _kPasswordStore   = 'sf_password_store_cache';
@@ -88,6 +89,27 @@ class SecureStorageService {
   Future<void> clearDesktopSecret() async {
     await _storage.delete(key: _kDesktopSecret);
     await _storage.delete(key: _kMockHardware); // also clear random secret
+  }
+
+  // ── Master Vault Key (MVK) ────────────────────────────────────────────────
+
+  Future<void> saveMvkBytes(Uint8List mvk) async {
+    await _storage.write(key: _kMasterVaultKey, value: base64Encode(mvk));
+  }
+
+  Future<Uint8List?> loadMvkBytes() async {
+    final b64 = await _storage.read(key: _kMasterVaultKey);
+    if (b64 == null || b64.isEmpty) return null;
+    try {
+      final bytes = base64Decode(b64);
+      return bytes.length == 32 ? bytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearMvk() async {
+    await _storage.delete(key: _kMasterVaultKey);
   }
 
   // ── NFC Expected Secret ─────────────────────────────────────────────────

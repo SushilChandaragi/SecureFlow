@@ -404,10 +404,21 @@ class _ConfirmDeleteDialog extends StatelessWidget {
 
 // ─── In-app PDF Viewer ────────────────────────────────────────────────────────
 
-class _PdfViewerScreen extends StatelessWidget {
+class _PdfViewerScreen extends StatefulWidget {
   final String name;
   final Uint8List bytes;
   const _PdfViewerScreen({required this.name, required this.bytes});
+
+  @override
+  State<_PdfViewerScreen> createState() => _PdfViewerScreenState();
+}
+
+class _PdfViewerScreenState extends State<_PdfViewerScreen> {
+  @override
+  void dispose() {
+    widget.bytes.fillRange(0, widget.bytes.length, 0);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -420,7 +431,7 @@ class _PdfViewerScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back, color: SFColors.textMain),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(name,
+        title: Text(widget.name,
             style: SFTypography.body.copyWith(fontSize: 13),
             overflow: TextOverflow.ellipsis),
         actions: [
@@ -442,17 +453,28 @@ class _PdfViewerScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: SfPdfViewer.memory(bytes),
+      body: SfPdfViewer.memory(widget.bytes),
     );
   }
 }
 
 // ─── In-app Image Viewer ──────────────────────────────────────────────────────
 
-class _ImageViewerScreen extends StatelessWidget {
+class _ImageViewerScreen extends StatefulWidget {
   final String name;
   final Uint8List bytes;
   const _ImageViewerScreen({required this.name, required this.bytes});
+
+  @override
+  State<_ImageViewerScreen> createState() => _ImageViewerScreenState();
+}
+
+class _ImageViewerScreenState extends State<_ImageViewerScreen> {
+  @override
+  void dispose() {
+    widget.bytes.fillRange(0, widget.bytes.length, 0);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -465,13 +487,13 @@ class _ImageViewerScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back, color: SFColors.textMain),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(name,
+        title: Text(widget.name,
             style: SFTypography.body.copyWith(fontSize: 13),
             overflow: TextOverflow.ellipsis),
       ),
       body: Center(
         child: InteractiveViewer(
-          child: Image.memory(bytes, fit: BoxFit.contain),
+          child: Image.memory(widget.bytes, fit: BoxFit.contain),
         ),
       ),
     );
@@ -480,14 +502,25 @@ class _ImageViewerScreen extends StatelessWidget {
 
 // ─── In-app Text Viewer ───────────────────────────────────────────────────────
 
-class _TextViewerScreen extends StatelessWidget {
+class _TextViewerScreen extends StatefulWidget {
   final String name;
   final Uint8List bytes;
   const _TextViewerScreen({required this.name, required this.bytes});
 
   @override
+  State<_TextViewerScreen> createState() => _TextViewerScreenState();
+}
+
+class _TextViewerScreenState extends State<_TextViewerScreen> {
+  @override
+  void dispose() {
+    widget.bytes.fillRange(0, widget.bytes.length, 0);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final text = String.fromCharCodes(bytes);
+    final text = String.fromCharCodes(widget.bytes);
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
       appBar: AppBar(
@@ -497,7 +530,7 @@ class _TextViewerScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back, color: SFColors.textMain),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(name,
+        title: Text(widget.name,
             style: SFTypography.body.copyWith(fontSize: 13),
             overflow: TextOverflow.ellipsis),
       ),
