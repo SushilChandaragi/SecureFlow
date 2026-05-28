@@ -142,7 +142,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
       padded.setRange(0, payloadBytes.length.clamp(0, 32), payloadBytes);
       _crypto.nfcHandshake(padded);
       sfLog('Session: NFC handshake ok');
-      _setUnlocked(authMethod: 'nfc');
+      await _setUnlocked(authMethod: 'nfc');
       return true;
     } catch (e) {
       sfLog('Session: NFC exception=$e');
@@ -164,7 +164,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
       try {
         _crypto.mockHandshake(desktopSecret);
         sfLog('Session: desktop-secret handshake ok');
-        _setUnlocked(authMethod: 'biometric');
+        await _setUnlocked(authMethod: 'biometric');
         return true;
       } on CryptoServiceException catch (e) {
         sfLog('Session: desktop-secret handshake error=${e.message}');
@@ -184,7 +184,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
     try {
       _crypto.mockHandshake(secret);
       sfLog('Session: mobile-secret handshake ok');
-      _setUnlocked(authMethod: 'biometric');
+      await _setUnlocked(authMethod: 'biometric');
       return true;
     } on CryptoServiceException catch (e) {
       sfLog('Session: mock handshake error=${e.message}');
@@ -201,10 +201,20 @@ class SessionNotifier extends StateNotifier<SessionState> {
     );
   }
 
-  void _setUnlocked({required String authMethod}) {
+  Future<void> _setUnlocked({required String authMethod}) async {
     sfLog('Session: unlocked via $authMethod');
-    // Attach crypto to DB so it can encrypt/decrypt rows
-    _db.attachCrypto(_crypto);
+    
+    // Load or generate a device-unique secret for local SQLite encryption.
+    // This remains completely decoupled from whether we are paired to a desktop.
+    var secret = await _storage.loadMockHardwareSecret();
+    if (secret == null) {
+      sfLog('Session: generating and saving new device-unique mockHardwareSecret');
+      secret = _generateSecret(32);
+      await _storage.saveMockHardwareSecret(secret);
+    }
+    
+    _db.attachSecret(secret);
+    
     final profile = UserProfile(
       deviceName: 'ANDROID DEVICE',
       sessionId: DateTime.now().millisecondsSinceEpoch.toRadixString(16).toUpperCase(),
@@ -224,7 +234,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
   void lock() {
     sfLog('Session: lock');
     _crypto.lockVault();
-    _db.detachCrypto();
+    _db.detachSecret();
     state = const SessionState(statusMessage: 'VAULT SEALED');
   }
 
@@ -257,12 +267,14 @@ final vaultFilesProvider = FutureProvider<List<VaultFile>>((ref) async {
 // ─── Credentials ─────────────────────────────────────────────────────────────
 
 class CredentialNotifier extends StateNotifier<List<Credential>> {
-  final DatabaseService _db;
-  final CryptoService _crypto;
-  final CloudService? _cloud;
+  final Ref _ref;
   static const _filename = 'passwords.enc';
 
-  CredentialNotifier(this._db, this._crypto, this._cloud) : super([]);
+  CredentialNotifier(this._ref) : super([]);
+
+  DatabaseService get _db => _ref.read(databaseServiceProvider);
+  CryptoService get _crypto => _ref.read(cryptoServiceProvider);
+  CloudService? get _cloud => _ref.read(cloudServiceProvider).valueOrNull;
 
   Future<void> load() async {
     try {
@@ -303,21 +315,20 @@ class CredentialNotifier extends StateNotifier<List<Credential>> {
 }
 
 final credentialProvider = StateNotifierProvider<CredentialNotifier, List<Credential>>((ref) {
-  final db     = ref.watch(databaseServiceProvider);
-  final crypto = ref.watch(cryptoServiceProvider);
-  final cloud  = ref.watch(cloudServiceProvider).valueOrNull;
-  return CredentialNotifier(db, crypto, cloud);
+  return CredentialNotifier(ref);
 });
 
 // ─── TOTP Keys ───────────────────────────────────────────────────────────────
 
 class TotpNotifier extends StateNotifier<List<TotpKey>> {
-  final DatabaseService _db;
-  final CryptoService _crypto;
-  final CloudService? _cloud;
+  final Ref _ref;
   static const _filename = 'auth_keys.enc';
 
-  TotpNotifier(this._db, this._crypto, this._cloud) : super([]);
+  TotpNotifier(this._ref) : super([]);
+
+  DatabaseService get _db => _ref.read(databaseServiceProvider);
+  CryptoService get _crypto => _ref.read(cryptoServiceProvider);
+  CloudService? get _cloud => _ref.read(cloudServiceProvider).valueOrNull;
 
   Future<void> load() async {
     try {
@@ -358,21 +369,20 @@ class TotpNotifier extends StateNotifier<List<TotpKey>> {
 }
 
 final totpProvider = StateNotifierProvider<TotpNotifier, List<TotpKey>>((ref) {
-  final db     = ref.watch(databaseServiceProvider);
-  final crypto = ref.watch(cryptoServiceProvider);
-  final cloud  = ref.watch(cloudServiceProvider).valueOrNull;
-  return TotpNotifier(db, crypto, cloud);
+  return TotpNotifier(ref);
 });
 
 // ─── Document Vault ───────────────────────────────────────────────────────────
 
 class DocumentNotifier extends StateNotifier<List<VaultDocument>> {
-  final DatabaseService _db;
-  final CryptoService _crypto;
-  final CloudService? _cloud;
+  final Ref _ref;
   static const _prefix = 'docs/';
 
-  DocumentNotifier(this._db, this._crypto, this._cloud) : super([]);
+  DocumentNotifier(this._ref) : super([]);
+
+  DatabaseService get _db => _ref.read(databaseServiceProvider);
+  CryptoService get _crypto => _ref.read(cryptoServiceProvider);
+  CloudService? get _cloud => _ref.read(cloudServiceProvider).valueOrNull;
 
   Future<void> load() async {
     try {
@@ -437,10 +447,6 @@ class DocumentNotifier extends StateNotifier<List<VaultDocument>> {
   }
 }
 
-
 final documentProvider = StateNotifierProvider<DocumentNotifier, List<VaultDocument>>((ref) {
-  final db    = ref.watch(databaseServiceProvider);
-  final crypto= ref.watch(cryptoServiceProvider);
-  final cloud = ref.watch(cloudServiceProvider).valueOrNull;
-  return DocumentNotifier(db, crypto, cloud);
+  return DocumentNotifier(ref);
 });

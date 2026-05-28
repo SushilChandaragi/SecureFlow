@@ -353,7 +353,7 @@ class CryptoEngine:
         if not secret:
             raise CryptoEngineError("mock_hardware_secret.txt is empty.")
 
-        return secret
+        return secret.strip()
 
     def _derive_key(self, secret: bytes, handshake_nonce: bytes) -> bytearray:
         hkdf = HKDF(

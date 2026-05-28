@@ -68,10 +68,9 @@ class SecureStorageService {
   // ── Desktop Shared Secret (links mobile to desktop mock_hardware_secret.txt) ─
 
   /// Save the exact string contents of the desktop's mock_hardware_secret.txt.
-  /// The mobile encodes this as UTF-8 bytes (no trailing whitespace trimming)
-  /// to exactly reproduce what Python's `path.read_bytes()` returns.
+  /// The secret string is trimmed to eliminate whitespace/newline mismatches.
   Future<void> saveDesktopSecret(String secret) async {
-    await _storage.write(key: _kDesktopSecret, value: secret);
+    await _storage.write(key: _kDesktopSecret, value: secret.trim());
   }
 
   /// Returns the raw UTF-8 bytes of the stored desktop secret, or null if not set.
@@ -87,7 +86,6 @@ class SecureStorageService {
 
   Future<void> clearDesktopSecret() async {
     await _storage.delete(key: _kDesktopSecret);
-    await _storage.delete(key: _kMockHardware); // also clear random secret
   }
 
   // ── NFC Expected Secret ─────────────────────────────────────────────────

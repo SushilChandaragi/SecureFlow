@@ -30,7 +30,7 @@ class DatabaseService {
   static const _dbVersion = 1;
 
   Database? _db;
-  CryptoService? _crypto;
+  final CryptoService _localCrypto = CryptoService();
 
   // Completer ensures open() is awaited exactly once across all callers.
   Completer<void>? _openCompleter;
@@ -106,26 +106,22 @@ class DatabaseService {
     return _db!;
   }
 
-  void attachCrypto(CryptoService crypto) {
-    _crypto = crypto;
-    sfLog('DB: crypto attached — unlocked=${crypto.isUnlocked}');
+  void attachSecret(Uint8List secret) {
+    _localCrypto.mockHandshake(secret);
+    sfLog('DB: local crypto attached & unlocked');
   }
 
-  void detachCrypto() {
-    _crypto = null;
-    sfLog('DB: crypto detached');
+  void detachSecret() {
+    _localCrypto.lockVault();
+    sfLog('DB: local crypto detached & locked');
   }
 
   CryptoService get _c {
-    if (_crypto == null) {
-      sfLog('DB: ERROR — no crypto attached');
-      throw StateError('DatabaseService: vault locked — authenticate first');
+    if (!_localCrypto.isUnlocked) {
+      sfLog('DB: ERROR — local crypto reports locked');
+      throw StateError('DatabaseService: local crypto is locked');
     }
-    if (!_crypto!.isUnlocked) {
-      sfLog('DB: ERROR — crypto reports locked');
-      throw StateError('DatabaseService: CryptoService reports locked');
-    }
-    return _crypto!;
+    return _localCrypto;
   }
 
   // ── Credentials ────────────────────────────────────────────────────────────
