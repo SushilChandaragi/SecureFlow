@@ -155,8 +155,8 @@ class CryptoEngine:
 
         return dest_path
 
-    def encrypt_bytes_to_vault(self, data: bytes, filename: str, overwrite: bool = True) -> Path:
-        """Encrypt raw bytes and store them in the SecureFlow_Vault directory."""
+    def encrypt_bytes(self, data: bytes) -> bytes:
+        """Encrypt raw bytes and return the V3 blob bytes."""
         self._require_key()
         if self._handshake_nonce is None:
             raise CryptoEngineError("Handshake nonce missing. Perform hardware tap again.")
@@ -169,14 +169,22 @@ class CryptoEngine:
 
         mode = self.MODE_HARDWARE if self._handshake_mode == "hardware" else self.MODE_MOCK
 
-        blob = self.VAULT_HEADER_V3 + mode + self._handshake_nonce + file_nonce + ciphertext
+        return self.VAULT_HEADER_V3 + mode + self._handshake_nonce + file_nonce + ciphertext
 
+    def decrypt_bytes(self, data: bytes) -> bytes:
+        """Decrypt raw V3 blob bytes and return decrypted plaintext bytes."""
+        return self.decrypt_blob(data)
+
+    def encrypt_bytes_to_vault(self, data: bytes, filename: str, overwrite: bool = True) -> Path:
+        """Encrypt raw bytes and store them in the SecureFlow_Vault directory."""
+        blob = self.encrypt_bytes(data)
         dest_path = self._vault_dir / filename
         if not overwrite:
             dest_path = self._unique_path(dest_path)
 
         dest_path.write_bytes(blob)
         return dest_path
+
 
     def decrypt_to_memory(self, enc_filepath: str | Path, com_port: Optional[str] = None) -> bytes:
         """Decrypt a .enc file into memory and return raw bytes.
@@ -367,6 +375,12 @@ class CryptoEngine:
         return bytearray(hkdf.derive(ikm))
 
     def _hardware_hmac(self, com_port: str, nonce: bytes) -> bytes:
+        if com_port.upper() == "MOCK":
+            import hmac
+            import hashlib
+            secret = self._load_hardware_secret().strip()
+            return hmac.new(secret, nonce, hashlib.sha256).digest()
+
         try:
             import serial
         except Exception as exc:  # pragma: no cover - import failure depends on environment
@@ -386,6 +400,7 @@ class CryptoEngine:
             raise CryptoEngineError("ESP32 did not return a full 32-byte HMAC response.")
 
         return response
+
 
     def _wipe_key(self, key: Optional[bytearray]) -> None:
         if not key:

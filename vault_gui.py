@@ -775,7 +775,8 @@ class VaultGUI(ctk.CTk):
 
         port = self._hardware_port or self.port_entry.get().strip()
         try:
-            raw = self.crypto.decrypt_to_memory(vault_path, com_port=port)
+            encrypted_blob = vault_path.read_bytes()
+            raw = self.crypto.decrypt_blob(encrypted_blob, com_port=port)
             data = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             self._set_status_message("Failed to load passwords.", is_error=True)
@@ -838,11 +839,13 @@ class VaultGUI(ctk.CTk):
 
         blob = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         try:
-            self.crypto.encrypt_bytes_to_vault(blob, PASSWORD_STORE_FILENAME, overwrite=True)
+            encrypted_blob = self.crypto.encrypt_bytes(blob)
+            vault_path.write_bytes(encrypted_blob)
         except CryptoEngineError as exc:
             self._set_status_message(str(exc), is_error=True)
             self._log_event(f"Failed to save passwords: {exc}")
             logger.warning("Failed to save passwords: %s", exc)
+
 
     def _clear_passwords_memory(self) -> None:
         self._password_store.clear()
@@ -1158,6 +1161,39 @@ class VaultGUI(ctk.CTk):
         self._hardware_port = ""
         self._set_unlocked_state(False, message="Behavioral anomaly detected. Vault locked.", is_error=True)
         self._log_event(f"ML anomaly score {score:.3f} exceeded threshold. Vault locked.")
+
+        # Dispatch Telegram Bot Alert in a separate thread to keep UI interactive
+        import threading
+        def send_telegram_alert():
+            import os
+            try:
+                import requests
+            except ImportError:
+                logger.warning("requests package is not installed. Telegram alert skipped.")
+                return
+
+            token = os.environ.get("TELEGRAM_BOT_TOKEN")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+            if not token or not chat_id:
+                logger.info("Telegram notification skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured.")
+                return
+
+            try:
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": f"🚨 SecureFlow Alert: Anomalous keystroke behavior detected. Vault locked. Anomaly score: {score:.3f}"
+                }
+                res = requests.post(url, json=payload, timeout=5)
+                if res.status_code == 200:
+                    logger.info("Telegram alert sent successfully.")
+                else:
+                    logger.warning("Telegram alert API returned status %d: %s", res.status_code, res.text)
+            except Exception as e:
+                logger.error("Failed to send Telegram alert: %s", e)
+
+        threading.Thread(target=send_telegram_alert, daemon=True).start()
+
 
     def _start_totp_loop(self) -> None:
         if self._totp_timer_id is not None:
@@ -1825,6 +1861,10 @@ class VaultGUI(ctk.CTk):
             self._hardware_monitor_id = None
             return
 
+        if self._hardware_port.upper() == "MOCK":
+            self._hardware_monitor_id = self._schedule_after(1500, self._check_hardware_connection)
+            return
+
         try:
             import serial.tools.list_ports
 
@@ -1840,3 +1880,4 @@ class VaultGUI(ctk.CTk):
             return
 
         self._hardware_monitor_id = self._schedule_after(1500, self._check_hardware_connection)
+
