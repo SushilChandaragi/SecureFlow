@@ -17,7 +17,8 @@ import pyotp
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from PIL import Image
+from PIL import Image, ImageTk
+import qrcode
 
 from cloud_manager import CloudManager, CloudManagerError
 from crypto_engine import CryptoEngine, CryptoEngineError
@@ -180,7 +181,7 @@ class VaultGUI(ctk.CTk):
         self.sidebar_frame = ctk.CTkFrame(self, fg_color=COLORS["panel"], corner_radius=14)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
-        self.sidebar_frame.grid_rowconfigure(4, weight=1)
+        self.sidebar_frame.grid_rowconfigure(5, weight=1)
 
         ctk.CTkLabel(
             self.sidebar_frame,
@@ -240,7 +241,19 @@ class VaultGUI(ctk.CTk):
         )
         self.encrypt_button.grid(row=3, column=0, sticky="ew", padx=16, pady=6)
 
-        ctk.CTkFrame(self.sidebar_frame, fg_color="transparent").grid(row=4, column=0, sticky="nsew")
+        self.pair_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="📱 Pair Mobile Companion",
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=self._on_pair_click,
+        )
+        self.pair_button.grid(row=4, column=0, sticky="ew", padx=16, pady=6)
+
+        ctk.CTkFrame(self.sidebar_frame, fg_color="transparent").grid(row=5, column=0, sticky="nsew")
 
         self.panic_button = ctk.CTkButton(
             self.sidebar_frame,
@@ -1456,6 +1469,7 @@ class VaultGUI(ctk.CTk):
         if unlocked:
             self.status_label.configure(text="Status: 🟢 UNLOCKED", text_color=COLORS["success"])
             self.encrypt_button.configure(state="normal")
+            self.pair_button.configure(state="normal")
             for button in self._file_buttons:
                 button.configure(state="normal")
             self._set_badge_state(self.badge_key, True)
@@ -1467,6 +1481,7 @@ class VaultGUI(ctk.CTk):
         else:
             self.status_label.configure(text="Status: 🔴 LOCKED", text_color=COLORS["danger"])
             self.encrypt_button.configure(state="disabled")
+            self.pair_button.configure(state="disabled")
             for button in self._file_buttons:
                 button.configure(state="disabled")
             self._stop_hardware_monitor()
@@ -1880,4 +1895,130 @@ class VaultGUI(ctk.CTk):
             return
 
         self._hardware_monitor_id = self._schedule_after(1500, self._check_hardware_connection)
+
+    def _on_pair_click(self) -> None:
+        """Display a beautiful, custom-themed dialog with the MVK QR code for mobile pairing."""
+        try:
+            # Load the secret via crypto engine
+            secret_bytes = self.crypto._load_hardware_secret()
+            secret_str = secret_bytes.decode("utf-8").strip()
+        except Exception as exc:
+            messagebox.showerror("Mobile Pairing", f"Could not load master vault key: {exc}")
+            return
+
+        self._show_qr_window(secret_str)
+
+    def _show_qr_window(self, secret: str) -> None:
+        """Draws a gorgeous, premium modal containing the MVK QR code."""
+        qr_win = ctk.CTkToplevel(self)
+        qr_win.title("Mobile Companion Pairing")
+        qr_win.geometry("420x540")
+        qr_win.resizable(False, False)
+        qr_win.configure(fg_color=COLORS["bg"])
+        
+        # Ensure it stays on top of parent window
+        qr_win.transient(self)
+        qr_win.grab_set()
+
+        # Premium header
+        ctk.CTkLabel(
+            qr_win,
+            text="PAIR COMPANION",
+            font=FONTS["title"],
+            text_color=COLORS["text"]
+        ).pack(pady=(24, 8))
+
+        ctk.CTkLabel(
+            qr_win,
+            text="Scan this QR code from the SecureFlow Mobile app\nto sync your hardware-gated encryption key.",
+            font=FONTS["body"],
+            text_color=COLORS["muted"],
+            justify="center"
+        ).pack(padx=24, pady=(0, 16))
+
+        # Generate QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=2,
+        )
+        qr.add_data(secret)
+        qr.make(fit=True)
+
+        # Style the QR image with a custom dark/light palette to pop perfectly on the dark UI
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        qr_img = qr_img.resize((240, 240), Image.Resampling.LANCZOS)
+        
+        # Convert PIL to ImageTk
+        photo_img = ImageTk.PhotoImage(qr_img)
+        
+        # Store a reference to avoid garbage collection
+        qr_win.qr_image_ref = photo_img
+
+        # Display the QR code inside a stylish, bordered frame
+        qr_frame = ctk.CTkFrame(
+            qr_win,
+            width=250,
+            height=250,
+            fg_color="white", # high contrast background for the scanner
+            corner_radius=12,
+        )
+        qr_frame.pack(pady=12)
+        qr_frame.pack_propagate(False)
+
+        qr_label = ctk.CTkLabel(qr_frame, image=photo_img, text="")
+        qr_label.pack(expand=True, fill="both")
+
+        # Toggleable Raw Key display
+        secret_visible = {"value": False}
+        
+        secret_box_frame = ctk.CTkFrame(
+            qr_win,
+            fg_color=COLORS["panel"],
+            border_width=1,
+            border_color=COLORS["border"],
+            corner_radius=8
+        )
+        secret_box_frame.pack(fill="x", padx=32, pady=16)
+
+        secret_label = ctk.CTkLabel(
+            secret_box_frame,
+            text="••••••••••••••••••••••••••••••••",
+            font=FONTS["mono"],
+            text_color=COLORS["muted"]
+        )
+        secret_label.pack(side="left", padx=12, pady=10, expand=True, fill="x")
+
+        def toggle_secret():
+            secret_visible["value"] = not secret_visible["value"]
+            if secret_visible["value"]:
+                truncated = secret[:12] + "..." + secret[-12:] if len(secret) > 24 else secret
+                secret_label.configure(text=truncated, text_color=COLORS["success"])
+                toggle_btn.configure(text="Hide")
+            else:
+                secret_label.configure(text="••••••••••••••••••••••••••••••••", text_color=COLORS["muted"])
+                toggle_btn.configure(text="Show")
+
+        toggle_btn = ctk.CTkButton(
+            secret_box_frame,
+            text="Show",
+            width=60,
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            command=toggle_secret
+        )
+        toggle_btn.pack(side="right", padx=8, pady=8)
+
+        # Close button
+        close_btn = ctk.CTkButton(
+            qr_win,
+            text="Done",
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            text_color=COLORS["text"],
+            command=qr_win.destroy
+        )
+        close_btn.pack(pady=(0, 24))
 

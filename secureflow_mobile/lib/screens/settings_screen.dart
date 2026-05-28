@@ -9,6 +9,7 @@ import '../config/constants.dart';
 import '../services/vault_provider.dart';
 import '../widgets/tactical_label.dart';
 import '../widgets/panic_button.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 // ─── Settings state ───────────────────────────────────────────────────────────
 
@@ -514,6 +515,7 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
   bool _saving     = false;
   bool _loaded     = false;
   bool _secretObscure = true;
+  bool _showQrScanner = false;
 
   @override
   void initState() {
@@ -612,13 +614,71 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
                   // Divider between AWS creds and vault key
                   const Divider(color: SFColors.borderSoft, height: 1),
                   const SizedBox(height: SFSpacing.lg),
-                  const TacticalLabel('DESKTOP VAULT SECRET', color: SFColors.textMuted),
+                  Row(children: [
+                    const TacticalLabel('DESKTOP VAULT SECRET', color: SFColors.textMuted),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => setState(() => _showQrScanner = !_showQrScanner),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: SFColors.bgPrimary,
+                          borderRadius: BorderRadius.circular(SFRadius.small),
+                          border: Border.all(color: SFColors.borderSoft),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _showQrScanner ? Icons.keyboard_outlined : Icons.qr_code_scanner_outlined,
+                              size: 12,
+                              color: SFColors.textMuted,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _showQrScanner ? 'MANUAL' : 'SCAN QR',
+                              style: SFTypography.metadata.copyWith(fontSize: 10, color: SFColors.textMuted),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ]),
                   const SizedBox(height: 6),
                   Text(
-                    'Paste the contents of mock_hardware_secret.txt from your desktop. Required to decrypt files uploaded from the desktop app.',
+                    'Paste the contents of mock_hardware_secret.txt from your desktop, or click SCAN QR to scan the pairing QR code.',
                     style: SFTypography.bodyMuted.copyWith(fontSize: 10),
                   ),
                   const SizedBox(height: SFSpacing.md),
+                  if (_showQrScanner) ...[
+                    Container(
+                      height: 200,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(SFRadius.small),
+                        border: Border.all(color: SFColors.borderSoft),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: MobileScanner(
+                        onDetect: (capture) {
+                          final raw = capture.barcodes.firstOrNull?.rawValue;
+                          if (raw != null) {
+                            final trimmed = raw.trim();
+                            setState(() {
+                              _sharedSecretCtrl.text = trimmed;
+                              _showQrScanner = false;
+                            });
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('🟢 DESKTOP SECRET CAPTURED SUCCESSFULLY!'),
+                                backgroundColor: Color(0xFF10B981),
+                                duration: Duration(seconds: 1),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: SFSpacing.md),
+                  ],
                   TextFormField(
                     controller: _sharedSecretCtrl,
                     obscureText: _secretObscure,

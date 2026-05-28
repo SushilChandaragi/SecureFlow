@@ -367,16 +367,16 @@ class _ConfirmDeleteDialog extends StatelessWidget {
 
 // ─── Add / Edit TOTP bottom sheet ────────────────────────────────────────────
 
-class _AddTotpSheet extends StatefulWidget {
+class _AddTotpSheet extends ConsumerStatefulWidget {
   final TotpKey? existing;
   final void Function(TotpKey) onSave;
   const _AddTotpSheet({this.existing, required this.onSave});
 
   @override
-  State<_AddTotpSheet> createState() => _AddTotpSheetState();
+  ConsumerState<_AddTotpSheet> createState() => _AddTotpSheetState();
 }
 
-class _AddTotpSheetState extends State<_AddTotpSheet> {
+class _AddTotpSheetState extends ConsumerState<_AddTotpSheet> {
   bool _scanMode = false;
   bool _scanning = false;
   final MobileScannerController _scanCtrl = MobileScannerController();
@@ -413,6 +413,12 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
     if (raw == null) return;
     setState(() => _scanning = true);
 
+    final trimmed = raw.trim();
+    if (trimmed.startsWith('SecureFlow-') || trimmed.length >= 32) {
+      _pairMobileCompanion(trimmed);
+      return;
+    }
+
     final uri = Uri.tryParse(raw);
     if (uri != null && uri.scheme == 'otpauth' && uri.host == 'totp') {
       final labelRaw = Uri.decodeComponent(uri.path.replaceFirst('/', ''));
@@ -439,6 +445,31 @@ class _AddTotpSheetState extends State<_AddTotpSheet> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('INVALID QR — NOT A TOTP CODE')),
     );
+  }
+
+  Future<void> _pairMobileCompanion(String secret) async {
+    try {
+      final storage = ref.read(storageServiceProvider);
+      await storage.saveDesktopSecret(secret);
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🟢 MOBILE COMPANION PAIRED SUCCESSFULLY!'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('ERROR PAIRING: $e'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+      setState(() => _scanning = false);
+    }
   }
 
   void _save() {
