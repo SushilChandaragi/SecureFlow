@@ -15,6 +15,7 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../config/colors.dart';
 import '../config/typography.dart';
 import '../models/vault_document.dart';
+import '../models/vault_file.dart';
 import '../services/vault_provider.dart';
 import '../widgets/tactical_label.dart';
 import 'cloud_vault_screen.dart';
