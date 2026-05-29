@@ -6,6 +6,7 @@
 ///   • Automatically synced to S3 in the background after each add
 library;
 
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -49,7 +50,10 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     if (result == null || result.files.isEmpty) return;
 
     final file = result.files.first;
-    final bytes = file.bytes;
+    Uint8List? bytes = file.bytes;
+    if ((bytes == null || bytes.isEmpty) && file.path != null) {
+      bytes = await File(file.path!).readAsBytes();
+    }
     if (bytes == null || bytes.isEmpty) {
       _showSnack('COULD NOT READ FILE BYTES', isError: true);
       return;
@@ -256,8 +260,6 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const TacticalLabel('ENCRYPTED STORAGE', color: SFColors.textMuted),
-                      const SizedBox(height: 6),
                       Text('DOCUMENT VAULT', style: SFTypography.h1),
                       const SizedBox(height: 4),
                       Text(

@@ -108,8 +108,6 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const TacticalLabel('IDENTITY TOKENS', color: SFColors.textMuted),
-                  const SizedBox(height: 6),
                   Text('AUTHENTICATOR', style: SFTypography.h1),
                 ],
               ),

@@ -1,6 +1,8 @@
 /// Cloud Vault Screen — masonry grid of encrypted assets + file upload (§2)
 library;
 
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -50,7 +52,10 @@ class _CloudVaultScreenState extends ConsumerState<CloudVaultScreen> {
     if (result == null || result.files.isEmpty) return;
 
     final file = result.files.first;
-    final bytes = file.bytes;
+    Uint8List? bytes = file.bytes;
+    if ((bytes == null || bytes.isEmpty) && file.path != null) {
+      bytes = await File(file.path!).readAsBytes();
+    }
     if (bytes == null || bytes.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

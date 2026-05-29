@@ -115,23 +115,7 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(
                   SFSpacing.base, SFSpacing.md, SFSpacing.base, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const TacticalLabel('CREDENTIAL ARCHIVE',
-                      color: SFColors.textMuted),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Expanded(
-                          child: Text('PASSWORD VAULT', style: SFTypography.h1)),
-                      if (!_loading)
-                        TacticalLabel('${creds.length} STORED',
-                            color: SFColors.textFaint),
-                    ],
-                  ),
-                ],
-              ),
+              child: Text('PASSWORD VAULT', style: SFTypography.h1),
             ),
 
             // ── Search bar ───────────────────────────────────────────
@@ -310,23 +294,10 @@ class _CredentialCard extends StatefulWidget {
 
 class _CredentialCardState extends State<_CredentialCard> {
   bool _revealed = false;
-  bool _holding = false;
-  Timer? _holdTimer;
   Timer? _clipClearTimer;
 
-  void _onLongPressStart(_) {
-    _holdTimer = Timer(const Duration(milliseconds: 600), () {
-      if (mounted) setState(() => _revealed = true);
-    });
-    setState(() => _holding = true);
-  }
-
-  void _onLongPressEnd(_) {
-    _holdTimer?.cancel();
-    setState(() {
-      _holding = false;
-      _revealed = false;
-    });
+  void _toggleReveal() {
+    setState(() => _revealed = !_revealed);
   }
 
   void _copyPassword(BuildContext ctx) {
@@ -380,7 +351,6 @@ class _CredentialCardState extends State<_CredentialCard> {
 
   @override
   void dispose() {
-    _holdTimer?.cancel();
     _clipClearTimer?.cancel();
     super.dispose();
   }
@@ -398,142 +368,161 @@ class _CredentialCardState extends State<_CredentialCard> {
         borderRadius: BorderRadius.circular(SFRadius.card),
         border: Border.all(color: SFColors.borderSoft),
       ),
-      child: IntrinsicHeight(
-        child: Row(
-          children: [
-            // ── Left accent bar ───────────────────────────────────────
-            Container(
-              width: 3,
-              decoration: const BoxDecoration(
-                color: SFColors.borderMedium,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(SFRadius.card),
-                  bottomLeft: Radius.circular(SFRadius.card),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Avatar ────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: SFSpacing.md),
+            child: Container(
+              width: 40, height: 40,
+              decoration: BoxDecoration(
+                color: SFColors.bgPrimary,
+                borderRadius: BorderRadius.circular(SFRadius.small),
+                border: Border.all(color: SFColors.borderSoft),
+              ),
+              child: Center(
+                child: Text(
+                  initials,
+                  style: SFTypography.cardTitle.copyWith(
+                      fontSize: 16, color: SFColors.textMuted),
                 ),
               ),
             ),
+          ),
 
-            // ── Avatar ────────────────────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: SFSpacing.md, vertical: SFSpacing.md),
-              child: Container(
-                width: 40, height: 40,
-                decoration: BoxDecoration(
-                  color: SFColors.bgPrimary,
-                  borderRadius: BorderRadius.circular(SFRadius.small),
-                  border: Border.all(color: SFColors.borderSoft),
-                ),
-                child: Center(
-                  child: Text(
-                    initials,
-                    style: SFTypography.cardTitle.copyWith(
-                        fontSize: 16, color: SFColors.textMuted),
+          // ── Site + Username ───────────────────────────────────────
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: SFSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    widget.cred.website,
+                    style: SFTypography.body,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ),
-            ),
-
-            // ── Site + Username ───────────────────────────────────────
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: SFSpacing.md),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      widget.cred.website,
-                      style: SFTypography.body,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.cred.username,
+                    style: SFTypography.terminal.copyWith(fontSize: 10),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (widget.cred.notes.isNotEmpty) ...[
                     const SizedBox(height: 2),
                     Text(
-                      widget.cred.username,
-                      style: SFTypography.terminal.copyWith(fontSize: 10),
+                      widget.cred.notes,
+                      style: SFTypography.bodyMuted.copyWith(fontSize: 10),
                       overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
-                    if (widget.cred.notes.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.cred.notes,
-                        style: SFTypography.bodyMuted.copyWith(fontSize: 10),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                      ),
-                    ],
                   ],
-                ),
-              ),
-            ),
-
-            // ── Actions column ────────────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.all(SFSpacing.sm),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  // Copy / reveal button
-                  GestureDetector(
-                    onLongPressStart: _onLongPressStart,
-                    onLongPressEnd: _onLongPressEnd,
-                    onTap: () => _copyPassword(context),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: _holding
-                            ? SFColors.borderMedium
-                            : SFColors.bgPrimary,
-                        borderRadius: BorderRadius.circular(SFRadius.small),
-                        border: Border.all(color: SFColors.borderSoft),
+                  if (_revealed) ...[
+                    const SizedBox(height: SFSpacing.sm),
+                    GestureDetector(
+                      onTap: () => _copyPassword(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: SFSpacing.sm, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: SFColors.bgPrimary,
+                          borderRadius: BorderRadius.circular(SFRadius.small),
+                          border: Border.all(color: SFColors.borderSoft),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.lock_outline,
+                                size: 12, color: SFColors.textFaint),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                widget.cred.password,
+                                style: SFTypography.terminal.copyWith(fontSize: 11),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            const Icon(Icons.content_copy,
+                                size: 12, color: SFColors.textFaint),
+                          ],
+                        ),
                       ),
-                      child: _revealed
-                          ? Text(widget.cred.password,
-                              style: SFTypography.terminal.copyWith(fontSize: 10))
-                          : Row(mainAxisSize: MainAxisSize.min, children: [
-                              const Icon(Icons.fingerprint,
-                                  size: 13, color: SFColors.textFaint),
-                              const SizedBox(width: 3),
-                              Text('HOLD',
-                                  style: SFTypography.metadata.copyWith(fontSize: 8)),
-                            ]),
                     ),
-                  ),
-                  const SizedBox(height: SFSpacing.xs),
-                  // Edit
-                  GestureDetector(
-                    onTap: widget.onEdit,
-                    child: Container(
-                      padding: const EdgeInsets.all(7),
-                      decoration: BoxDecoration(
-                        color: SFColors.bgPrimary,
-                        borderRadius: BorderRadius.circular(SFRadius.small),
-                        border: Border.all(color: SFColors.borderSoft),
-                      ),
-                      child: const Icon(Icons.edit_outlined,
-                          size: 13, color: SFColors.textFaint),
-                    ),
-                  ),
-                  const SizedBox(height: SFSpacing.xs),
-                  // Delete
-                  GestureDetector(
-                    onTap: () => _confirmDelete(context),
-                    child: Container(
-                      padding: const EdgeInsets.all(7),
-                      decoration: BoxDecoration(
-                        color: SFColors.bgPrimary,
-                        borderRadius: BorderRadius.circular(SFRadius.small),
-                        border: Border.all(color: SFColors.borderSoft),
-                      ),
-                      child: const Icon(Icons.delete_outline,
-                          size: 13, color: SFColors.textFaint),
-                    ),
-                  ),
+                  ],
                 ],
               ),
             ),
-          ],
-        ),
+          ),
+
+          // ── Actions column ────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.all(SFSpacing.sm),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                // Reveal toggle
+                GestureDetector(
+                  onTap: _toggleReveal,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: _revealed ? SFColors.borderSoft : SFColors.bgPrimary,
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      border: Border.all(color: SFColors.borderSoft),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(
+                        _revealed
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        size: 13,
+                        color: SFColors.textFaint,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        _revealed ? 'HIDE' : 'HOLD',
+                        style: SFTypography.metadata.copyWith(fontSize: 8),
+                      ),
+                    ]),
+                  ),
+                ),
+                const SizedBox(height: SFSpacing.xs),
+                // Edit
+                GestureDetector(
+                  onTap: widget.onEdit,
+                  child: Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: SFColors.bgPrimary,
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      border: Border.all(color: SFColors.borderSoft),
+                    ),
+                    child: const Icon(Icons.edit_outlined,
+                        size: 13, color: SFColors.textFaint),
+                  ),
+                ),
+                const SizedBox(height: SFSpacing.xs),
+                // Delete
+                GestureDetector(
+                  onTap: () => _confirmDelete(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: SFColors.bgPrimary,
+                      borderRadius: BorderRadius.circular(SFRadius.small),
+                      border: Border.all(color: SFColors.borderSoft),
+                    ),
+                    child: const Icon(Icons.delete_outline,
+                        size: 13, color: SFColors.textFaint),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

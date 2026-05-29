@@ -1,7 +1,6 @@
 /// Dashboard Screen — secure home view, vertical layout (§2)
 library;
 
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
@@ -25,8 +24,6 @@ class DashboardScreen extends ConsumerStatefulWidget {
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   NavTab _currentTab = NavTab.vault;
-  Timer? _sessionTimer;
-  String _sessionTime = '00:00:00';
 
   @override
   void initState() {
@@ -36,18 +33,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ref.read(totpProvider.notifier).load();
       ref.read(documentProvider.notifier).load();
     });
-    _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      final profile = ref.read(sessionProvider).profile;
-      if (profile != null) {
-        setState(() => _sessionTime = profile.sessionDuration);
-      }
-    });
   }
 
   @override
   void dispose() {
-    _sessionTimer?.cancel();
     super.dispose();
   }
 
@@ -77,7 +66,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Widget _buildCurrentScreen() {
     switch (_currentTab) {
       case NavTab.vault:
-        return _VaultHome(sessionTime: _sessionTime);
+        return const _VaultHome();
       case NavTab.keys:
         return const PasswordVaultScreen();
       case NavTab.shield:
@@ -93,8 +82,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 // ─── Vault Home ───────────────────────────────────────────────────────────────
 
 class _VaultHome extends ConsumerWidget {
-  final String sessionTime;
-  const _VaultHome({required this.sessionTime});
+  const _VaultHome();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -114,35 +102,12 @@ class _VaultHome extends ConsumerWidget {
           SFSpacing.base, SFSpacing.md, SFSpacing.base, 110),
       children: [
 
-        // ── Status bar ────────────────────────────────────────────────
-        Row(
-          children: [
-            _GlyphBox(),
-            const SizedBox(width: SFSpacing.sm),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const TacticalLabel('ENCLAVE ACTIVE', color: SFColors.success),
-                  Text(sessionTime,
-                      style: SFTypography.terminal.copyWith(fontSize: 10)),
-                ],
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: SFSpacing.xl),
+        // ── Glyph ─────────────────────────────────────────────────────
+        _GlyphBox(),
+        const SizedBox(height: SFSpacing.md),
 
         // ── Title ─────────────────────────────────────────────────────
         Text('SECUREFLOW', style: SFTypography.h1),
-        const SizedBox(height: 4),
-        Text(
-          session.profile?.authMethodLabel != null
-              ? '${session.profile!.authMethodLabel} · Hardware-tethered'
-              : 'Zero-knowledge enclave',
-          style: SFTypography.terminal.copyWith(fontSize: 11),
-        ),
 
         const SizedBox(height: SFSpacing.xl),
         _Divider(),

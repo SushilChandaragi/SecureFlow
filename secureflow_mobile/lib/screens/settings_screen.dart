@@ -295,25 +295,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: SFSpacing.xl),
             _divider(),
 
-            // ── NFC key ───────────────────────────────────────────────
-            const SizedBox(height: SFSpacing.lg),
-            const TacticalLabel('NFC HARDWARE KEY', color: SFColors.textFaint),
-            const SizedBox(height: SFSpacing.md),
-            const _InfoRow('TAG TYPE', 'MIFARE CLASSIC 1K / NDEF TEXT'),
-            const _InfoRow('FORMAT', 'SECUREFLOW-NFC-KEY-V1-[8CHARS]'),
-            const SizedBox(height: SFSpacing.md),
-            _OutlineButton(
-              label: 'VIEW / RESET NFC KEY',
-              icon: Icons.nfc_outlined,
-              onTap: _showNfcResetSheet,
-            ),
+            // NFC Key UI removed — documentation moved to deep dive README
+            // The helper sheet _NfcKeySheet remains in this file but is no
+            // longer reachable from the Settings UI.
 
-            const SizedBox(height: SFSpacing.xl),
-            _divider(),
-
-            // ── About ─────────────────────────────────────────────────
-            const SizedBox(height: SFSpacing.lg),
-            const TacticalLabel('ABOUT', color: SFColors.textFaint),
+            // ── Merge About into Session
+            const SizedBox(height: SFSpacing.md),
+            const TacticalLabel('SESSION & APP INFO', color: SFColors.textFaint),
             const SizedBox(height: SFSpacing.md),
             const _InfoRow('VERSION', '1.0.0'),
             const _InfoRow('ENCRYPTION', 'AES-256-GCM'),
