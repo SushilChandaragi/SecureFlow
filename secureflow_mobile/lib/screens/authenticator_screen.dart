@@ -2,7 +2,9 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' show Random;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -452,6 +454,11 @@ class _AddTotpSheetState extends ConsumerState<_AddTotpSheet> {
     try {
       final storage = ref.read(storageServiceProvider);
       await storage.saveDesktopSecret(secret);
+      
+      // Update active CryptoService immediately upon QR pairing!
+      final trimmed = secret.trim();
+      final bytes = Uint8List.fromList(utf8.encode(trimmed));
+      ref.read(cryptoServiceProvider).updateHardwareSecret(bytes);
       
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

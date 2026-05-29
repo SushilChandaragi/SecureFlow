@@ -145,6 +145,23 @@ class CryptoService {
     _handshakeMode = 'none';
   }
 
+  /// Update active hardware secret (used when desktop secret is configured/paired in settings).
+  void updateHardwareSecret(Uint8List secret) {
+    _wipeKey();
+    _hardwareSecret = Uint8List.fromList(secret);
+    _handshakeNonce = _randomBytes(_kHandshakeNonce);
+    _sessionKey = _hkdfDerive(secret, _handshakeNonce!);
+    _handshakeMode = 'mock';
+    _isLocked = false;
+  }
+
+  /// Clear active hardware secret.
+  void clearHardwareSecret() {
+    _wipeKey();
+    _isLocked = true;
+    _handshakeMode = 'none';
+  }
+
   // ── Internal — Format Decryptors ───────────────────────────────────────────
 
   Uint8List _decryptV3(Uint8List blob) {

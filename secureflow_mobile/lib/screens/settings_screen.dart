@@ -3,6 +3,8 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:convert';
+import 'dart:typed_data';
 import '../config/colors.dart';
 import '../config/typography.dart';
 import '../services/vault_provider.dart';
@@ -400,15 +402,15 @@ class _FilledButton extends StatelessWidget {
 
 // ─── AWS Config Bottom Sheet ──────────────────────────────────────────────────
 
-class _AwsConfigSheet extends StatefulWidget {
+class _AwsConfigSheet extends ConsumerStatefulWidget {
   final dynamic storage;
   const _AwsConfigSheet({required this.storage});
 
   @override
-  State<_AwsConfigSheet> createState() => _AwsConfigSheetState();
+  ConsumerState<_AwsConfigSheet> createState() => _AwsConfigSheetState();
 }
 
-class _AwsConfigSheetState extends State<_AwsConfigSheet> {
+class _AwsConfigSheetState extends ConsumerState<_AwsConfigSheet> {
   final _formKey   = GlobalKey<FormState>();
   final _keyCtrl   = TextEditingController();
   final _secCtrl   = TextEditingController();
@@ -456,6 +458,12 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
     final secret = _sharedSecretCtrl.text; // preserve exact content incl \r\n if pasted
     if (secret.isNotEmpty) {
       await widget.storage.saveDesktopSecret(secret);
+      final trimmed = secret.trim();
+      final bytes = Uint8List.fromList(utf8.encode(trimmed));
+      ref.read(cryptoServiceProvider).updateHardwareSecret(bytes);
+    } else {
+      await widget.storage.clearDesktopSecret();
+      ref.read(cryptoServiceProvider).clearHardwareSecret();
     }
     if (!mounted) return;
     Navigator.pop(context);
