@@ -217,6 +217,40 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     }
   }
 
+  Future<void> _syncDocumentToCloud(VaultDocument doc) async {
+    final cloud = ref.read(cloudServiceProvider).valueOrNull;
+    if (cloud == null) {
+      _showSnack('CLOUD NOT CONFIGURED — ADD AWS CREDENTIALS IN SETTINGS', isError: true);
+      return;
+    }
+
+    final crypto = ref.read(cryptoServiceProvider);
+    if (!crypto.isUnlocked) {
+      _showSnack('VAULT LOCKED — BIOMETRIC AUTH REQUIRED', isError: true);
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      final plainBytes = await ref.read(documentProvider.notifier).openDocument(doc.id);
+      final encBlob = crypto.encryptToBlob(plainBytes);
+      await cloud.uploadVaultFile(encBlob, 'docs/${doc.id}.enc');
+      
+      // Update local db and provider state
+      await ref.read(databaseServiceProvider).markSynced(doc.id);
+      await ref.read(documentProvider.notifier).load(); // reload local state
+      
+      // Refresh S3 grid list
+      ref.invalidate(vaultFilesProvider);
+
+      _showSnack('SYNCED TO CLOUD: ${doc.name}');
+    } catch (e) {
+      _showSnack('CLOUD SYNC FAILED: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final docs = ref.watch(documentProvider);
@@ -282,70 +316,90 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
                 const SizedBox(height: SFSpacing.lg),
 
-                // Document list / Cloud grid
+                // Document list / Cloud grid with Pull-to-Refresh
                 Expanded(
-                  child: _showCloud
-                      ? filesAsync.when(
-                          data: (files) => files.isEmpty
-                              ? CloudEmptyState(onUpload: _pickAndUpload)
-                              : CloudFileGrid(files: files),
-                          loading: () => const Center(
-                            child: CircularProgressIndicator(
-                                strokeWidth: 1, color: SFColors.textMuted),
-                          ),
-                          error: (e, _) => Center(
-                            child: Text('ERROR: $e',
-                                style: SFTypography.metadata
-                                    .copyWith(color: SFColors.danger)),
-                          ),
-                        )
-                      : (docs.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.folder_open_outlined,
-                                      size: 36, color: SFColors.textFaint),
-                                  const SizedBox(height: SFSpacing.sm),
-                                  Text('NO DOCUMENTS STORED',
+                  child: RefreshIndicator(
+                    color: SFColors.textMain,
+                    backgroundColor: SFColors.bgCard,
+                    strokeWidth: 1.5,
+                    onRefresh: () async {
+                      ref.invalidate(vaultFilesProvider);
+                      await ref.read(documentProvider.notifier).load();
+                      await ref.read(vaultFilesProvider.future).catchError((_) => <VaultFile>[]);
+                    },
+                    child: _showCloud
+                        ? filesAsync.when(
+                            data: (files) => files.isEmpty
+                                ? CloudEmptyState(onUpload: _pickAndUpload)
+                                : CloudFileGrid(files: files),
+                            loading: () => const Center(
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 1, color: SFColors.textMuted),
+                            ),
+                            error: (e, _) => ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.all(SFSpacing.xl),
+                                  child: Text('ERROR: $e',
                                       style: SFTypography.metadata
-                                          .copyWith(color: SFColors.textFaint)),
-                                  const SizedBox(height: SFSpacing.xl),
-                                  GestureDetector(
-                                    onTap: _pickAndStore,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 20, vertical: 12),
-                                      decoration: BoxDecoration(
-                                        border: Border.all(
-                                            color: SFColors.borderMedium),
-                                        borderRadius: BorderRadius.circular(
-                                            SFRadius.small),
+                                          .copyWith(color: SFColors.danger)),
+                                ),
+                              ],
+                            ),
+                          )
+                        : (docs.isEmpty
+                            ? SingleChildScrollView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                child: Container(
+                                  height: MediaQuery.of(context).size.height * 0.5,
+                                  alignment: Alignment.center,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.folder_open_outlined,
+                                          size: 36, color: SFColors.textFaint),
+                                      const SizedBox(height: SFSpacing.sm),
+                                      Text('NO DOCUMENTS STORED',
+                                          style: SFTypography.metadata
+                                              .copyWith(color: SFColors.textFaint)),
+                                      const SizedBox(height: SFSpacing.xl),
+                                      GestureDetector(
+                                        onTap: _pickAndStore,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 20, vertical: 12),
+                                          decoration: BoxDecoration(
+                                            border: Border.all(
+                                                color: SFColors.borderMedium),
+                                            borderRadius: BorderRadius.circular(
+                                                SFRadius.small),
+                                          ),
+                                          child: const TacticalLabel(
+                                              'TAP + TO ADD FIRST DOCUMENT',
+                                              color: SFColors.textMuted),
+                                        ),
                                       ),
-                                      child: const TacticalLabel(
-                                          'TAP + TO ADD FIRST DOCUMENT',
-                                          color: SFColors.textMuted),
-                                    ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                            )
-                          : ListView.separated(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: SFSpacing.base,
-                                  vertical: SFSpacing.xs),
-                              itemCount: docs.length,
-                              separatorBuilder: (_, __) => const Divider(
-                                  color: SFColors.borderSoft, height: 1),
-                              itemBuilder: (_, i) => _DocumentTile(
-                                doc: docs[i],
-                                onOpen: () => _openDocument(docs[i]),
-                                onSync: () => ref
-                                    .read(documentProvider.notifier)
-                                    .syncDocument(docs[i].id),
-                                onDelete: () => _confirmDelete(docs[i]),
-                              ),
-                            )),
+                                ),
+                              )
+                            : ListView.separated(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: SFSpacing.base,
+                                    vertical: SFSpacing.xs),
+                                itemCount: docs.length,
+                                separatorBuilder: (_, __) => const Divider(
+                                    color: SFColors.borderSoft, height: 1),
+                                itemBuilder: (_, i) => _DocumentTile(
+                                  doc: docs[i],
+                                  onOpen: () => _openDocument(docs[i]),
+                                  onSync: () => _syncDocumentToCloud(docs[i]),
+                                  onDelete: () => _confirmDelete(docs[i]),
+                                ),
+                              )),
+                  ),
                 ),
                 const SizedBox(height: 110), // Padding below navigation pill
               ],
