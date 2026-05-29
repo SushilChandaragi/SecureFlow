@@ -5,10 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/colors.dart';
 import '../config/typography.dart';
-import '../config/constants.dart';
 import '../services/vault_provider.dart';
 import '../widgets/tactical_label.dart';
-import '../widgets/panic_button.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 // ─── Settings state ───────────────────────────────────────────────────────────
@@ -94,86 +92,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  void _onLockVault() => ref.read(sessionProvider.notifier).lock();
-
-  void _onClearCorruptData() {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (_) => AlertDialog(
-        backgroundColor: SFColors.bgCard,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(SFRadius.card),
-          side: const BorderSide(color: SFColors.borderDanger),
-        ),
-        title: Text('CLEAR CORRUPT DATA',
-            style: SFTypography.danger.copyWith(fontSize: 14)),
-        content: Text(
-          'Wipes all encrypted rows (credentials, TOTP, local docs) written before the v1.0.1 crypto fix. Use this ONCE if data shows as corrupt after the update. Cloud S3 files are NOT deleted.',
-          style: SFTypography.bodyMuted.copyWith(fontSize: 12),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('CANCEL', style: SFTypography.button),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              final db = ref.read(databaseServiceProvider);
-              await db.clearAllRows();
-              ref.read(credentialProvider.notifier).load();
-              ref.read(totpProvider.notifier).load();
-              ref.read(documentProvider.notifier).load();
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: SFColors.bgCard,
-                  content: Text('CORRUPT ROWS CLEARED — DB RESET',
-                      style: SFTypography.metadata.copyWith(color: SFColors.success)),
-                ),
-              );
-            },
-            child: Text('CONFIRM CLEAR', style: SFTypography.danger),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _onVaultDestruction() {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (_) => AlertDialog(
-        backgroundColor: SFColors.bgCard,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(SFRadius.card),
-          side: const BorderSide(color: SFColors.borderDanger),
-        ),
-        title: Text(SFCopy.vaultDestruction,
-            style: SFTypography.danger.copyWith(fontSize: 14)),
-        content: Text(
-          'THIS WILL PERMANENTLY ERASE ALL LOCAL DATA AND REVOKE THIS DEVICE\'S ACCESS.',
-          style: SFTypography.bodyMuted.copyWith(fontSize: 12),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('CANCEL', style: SFTypography.button),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await ref.read(storageServiceProvider).clearAll();
-              ref.read(sessionProvider.notifier).lock();
-            },
-            child: Text('CONFIRM DESTROY', style: SFTypography.danger),
-          ),
-        ],
-      ),
-    );
-  }
 
   void _showAwsSheet() {
     showModalBottomSheet(
@@ -188,22 +106,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  void _showNfcResetSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: SFColors.bgCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(SFRadius.bento)),
-        side: BorderSide(color: SFColors.borderSoft),
-      ),
-      builder: (_) => _NfcKeySheet(storage: ref.read(storageServiceProvider)),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
+    final filesAsync = ref.watch(vaultFilesProvider);
+    final cloudCount = filesAsync.valueOrNull?.length ?? 0;
+    final cloudError = filesAsync.hasError;
+    final cloudLoading = filesAsync.isLoading;
 
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
@@ -212,35 +122,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           padding: const EdgeInsets.fromLTRB(
               SFSpacing.base, SFSpacing.md, SFSpacing.base, 110),
           children: [
-            // ── Header ───────────────────────────────────────────────
-            const TacticalLabel('SYSTEM CONFIGURATION', color: SFColors.textMuted),
-            const SizedBox(height: 6),
             Text('SETTINGS', style: SFTypography.h1),
 
             const SizedBox(height: SFSpacing.xl),
             _divider(),
 
-            // ── Session ───────────────────────────────────────────────
-            const SizedBox(height: SFSpacing.lg),
-            const TacticalLabel('SESSION', color: SFColors.textFaint),
-            const SizedBox(height: SFSpacing.md),
-            _InfoRow('STATUS',
-              session.isUnlocked ? 'ACTIVE' : 'LOCKED',
-              valueColor: session.isUnlocked ? SFColors.success : SFColors.textFaint),
-            _InfoRow('AUTH METHOD', session.profile?.authMethodLabel ?? '—'),
-            _InfoRow('SESSION TIME', session.profile?.sessionDuration ?? '—'),
-            const SizedBox(height: SFSpacing.md),
-            if (session.isUnlocked)
-              _OutlineButton(
-                label: SFCopy.logout,
-                icon: Icons.logout,
-                onTap: _onLockVault,
-              ),
-
-            const SizedBox(height: SFSpacing.xl),
-            _divider(),
-
-            // ── Security toggles ──────────────────────────────────────
+            // ── Security policy ───────────────────────────────────────
             const SizedBox(height: SFSpacing.lg),
             const TacticalLabel('SECURITY POLICY', color: SFColors.textFaint),
             const SizedBox(height: SFSpacing.md),
@@ -283,9 +170,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: SFSpacing.lg),
             const TacticalLabel('CLOUD VAULT', color: SFColors.textFaint),
             const SizedBox(height: SFSpacing.md),
-            const _InfoRow('PROVIDER', 'AWS S3'),
-            const _InfoRow('ENCRYPTION', 'AES-256-GCM CLIENT-SIDE'),
-            const SizedBox(height: SFSpacing.md),
             _OutlineButton(
               label: 'CONFIGURE AWS CREDENTIALS',
               icon: Icons.cloud_outlined,
@@ -295,60 +179,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: SFSpacing.xl),
             _divider(),
 
-            // NFC Key UI removed — documentation moved to deep dive README
-            // The helper sheet _NfcKeySheet remains in this file but is no
-            // longer reachable from the Settings UI.
-
-            // ── Merge About into Session
+            // ── Authentication (moved from dashboard) ─────────────────
+            const SizedBox(height: SFSpacing.lg),
+            const TacticalLabel('AUTHENTICATION', color: SFColors.textFaint),
             const SizedBox(height: SFSpacing.md),
-            const TacticalLabel('SESSION & APP INFO', color: SFColors.textFaint),
-            const SizedBox(height: SFSpacing.md),
-            const _InfoRow('VERSION', '1.0.0'),
-            const _InfoRow('ENCRYPTION', 'AES-256-GCM'),
-            const _InfoRow('KEY DERIVE', 'HKDF-SHA256'),
-            const _InfoRow('PLATFORM', 'ANDROID'),
+            _InfoRow('METHOD', session.profile?.authMethodLabel ?? '—'),
+            _InfoRow('SESSION ID', session.profile?.sessionId ?? '—'),
 
             const SizedBox(height: SFSpacing.xl),
             _divider(),
 
-            // ── Danger zone ───────────────────────────────────────────
+            // ── Cloud vault status (moved from dashboard) ─────────────
             const SizedBox(height: SFSpacing.lg),
-            Container(
-              padding: const EdgeInsets.all(SFSpacing.md),
-              decoration: BoxDecoration(
-                border: Border.all(color: SFColors.danger.withAlpha(80)),
-                borderRadius: BorderRadius.circular(SFRadius.card),
-                color: SFColors.dangerMuted,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Row(children: [
-                    Icon(Icons.warning_amber_outlined, size: 14, color: SFColors.danger),
-                    SizedBox(width: 6),
-                    TacticalLabel('DANGER ZONE', color: SFColors.danger),
-                  ]),
-                  const SizedBox(height: SFSpacing.md),
-                  PanicButton(
-                    label: SFCopy.emergencyLock,
-                    icon: Icons.lock_outline,
-                    onPressed: _onLockVault,
-                  ),
-                  const SizedBox(height: SFSpacing.sm),
-                  PanicButton(
-                    label: 'CLEAR CORRUPT DB ROWS',
-                    icon: Icons.cleaning_services_outlined,
-                    onPressed: _onClearCorruptData,
-                  ),
-                  const SizedBox(height: SFSpacing.sm),
-                  PanicButton(
-                    label: SFCopy.vaultDestruction,
-                    icon: Icons.delete_forever_outlined,
-                    onPressed: _onVaultDestruction,
-                  ),
-                ],
-              ),
+            const TacticalLabel('CLOUD VAULT STATUS', color: SFColors.textFaint),
+            const SizedBox(height: SFSpacing.md),
+            _CloudStatusCard(
+              count: cloudCount,
+              isLoading: cloudLoading,
+              hasError: cloudError,
             ),
+
+            const SizedBox(height: SFSpacing.xl),
           ],
         ),
       ),
@@ -383,6 +234,70 @@ class _InfoRow extends StatelessWidget {
           ),
         ),
       ]),
+    );
+  }
+}
+
+class _CloudStatusCard extends StatelessWidget {
+  final int count;
+  final bool isLoading;
+  final bool hasError;
+
+  const _CloudStatusCard({
+    required this.count,
+    required this.isLoading,
+    required this.hasError,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final String statusText;
+    final Color statusColor;
+
+    if (isLoading) {
+      statusText = 'Connecting...';
+      statusColor = SFColors.textFaint;
+    } else if (hasError) {
+      statusText = 'Offline — check credentials in Settings';
+      statusColor = SFColors.textFaint;
+    } else if (count == 0) {
+      statusText = 'No encrypted files in S3';
+      statusColor = SFColors.textFaint;
+    } else {
+      statusText = '$count encrypted file${count == 1 ? '' : 's'} in S3';
+      statusColor = SFColors.success;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(SFSpacing.md),
+      decoration: BoxDecoration(
+        color: SFColors.bgCard,
+        borderRadius: BorderRadius.circular(SFRadius.card),
+        border: Border.all(color: SFColors.borderSoft),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            hasError ? Icons.cloud_off_outlined : Icons.cloud_done_outlined,
+            size: 20,
+            color: hasError ? SFColors.textFaint : SFColors.textMuted,
+          ),
+          const SizedBox(width: SFSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('S3 ENCRYPTED VAULT',
+                    style: SFTypography.body.copyWith(fontSize: 13)),
+                const SizedBox(height: 2),
+                Text(statusText,
+                    style: SFTypography.bodyMuted
+                        .copyWith(fontSize: 11, color: statusColor)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

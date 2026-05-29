@@ -8,4 +8,5 @@ pymupdf
 pyserial
 pyotp
 python-dotenv
+qrcode
 scikit-learn

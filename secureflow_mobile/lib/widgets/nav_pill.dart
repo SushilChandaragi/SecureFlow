@@ -19,8 +19,8 @@ class NavPill extends StatelessWidget {
 
   static const _tabs = [
     (NavTab.vault,  Icons.lock_outline,      'Vault'),
-    (NavTab.keys,   Icons.key_outlined,      'Keys'),
-    (NavTab.shield, Icons.shield_outlined,   'Shield'),
+    (NavTab.keys,   Icons.key_outlined,      'Passwords'),
+    (NavTab.shield, Icons.shield_outlined,   'MFA Codes'),
     (NavTab.folder, Icons.folder_outlined,   'Docs'),
     (NavTab.gear,   Icons.settings_outlined, 'Settings'),
   ];
@@ -32,7 +32,7 @@ class NavPill extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             // Multi-layer glass: very subtle white tint over pure black
             gradient: LinearGradient(
@@ -73,7 +73,7 @@ class NavPill extends StatelessWidget {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeInOut,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: isActive
                           ? Colors.white.withAlpha(25)

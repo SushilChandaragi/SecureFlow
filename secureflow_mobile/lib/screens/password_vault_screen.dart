@@ -88,22 +88,25 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
       backgroundColor: SFColors.bgPrimary,
 
       // ── FAB ──────────────────────────────────────────────────────────
-      floatingActionButton: GestureDetector(
-        onTap: _showAddSheet,
-        child: Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(
-            color: SFColors.textMain,
-            borderRadius: BorderRadius.circular(SFRadius.pill),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withAlpha(100),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4)),
-            ],
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 84),
+        child: GestureDetector(
+          onTap: _showAddSheet,
+          child: Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: SFColors.textMain,
+              borderRadius: BorderRadius.circular(SFRadius.pill),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withAlpha(100),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4)),
+              ],
+            ),
+            child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
           ),
-          child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
         ),
       ),
 
@@ -115,7 +118,7 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(
                   SFSpacing.base, SFSpacing.md, SFSpacing.base, 0),
-              child: Text('PASSWORD VAULT', style: SFTypography.h1),
+              child: Text('PASSWORDS', style: SFTypography.h1),
             ),
 
             // ── Search bar ───────────────────────────────────────────
@@ -127,7 +130,7 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
                 onChanged: (v) => setState(() => _query = v),
                 style: SFTypography.body,
                 decoration: InputDecoration(
-                  hintText: 'SEARCH CREDENTIALS...',
+                  hintText: 'SEARCH PASSWORDS...',
                   hintStyle:
                       SFTypography.body.copyWith(color: SFColors.textFaint),
                   prefixIcon: const Icon(Icons.search,
@@ -162,7 +165,7 @@ class _PasswordVaultScreenState extends ConsumerState<PasswordVaultScreen> {
                     SFSpacing.base, 0, SFSpacing.base, SFSpacing.sm),
                 child: TacticalLabel(
                   _query.isEmpty
-                      ? 'ALL CREDENTIALS'
+                      ? 'ALL PASSWORDS'
                       : 'RESULTS FOR "$_query"',
                   color: SFColors.textFaint,
                 ),
@@ -261,7 +264,7 @@ class _EmptyState extends StatelessWidget {
                     children: [
                       const Icon(Icons.add, size: 14, color: SFColors.textMuted),
                       const SizedBox(width: 6),
-                      Text('ADD FIRST CREDENTIAL',
+                        Text('ADD FIRST PASSWORD',
                           style: SFTypography.metadata.copyWith(
                               color: SFColors.textMuted)),
                     ],
@@ -328,7 +331,7 @@ class _CredentialCardState extends State<_CredentialCard> {
           borderRadius: BorderRadius.circular(SFRadius.bento),
           side: const BorderSide(color: SFColors.borderSoft),
         ),
-        title: Text('DELETE CREDENTIAL', style: SFTypography.body),
+        title: Text('DELETE PASSWORD', style: SFTypography.body),
         content: Text(
           'Remove "${widget.cred.website}"? This cannot be undone.',
           style: SFTypography.bodyMuted,
@@ -602,7 +605,7 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
                 // ── Sheet header ─────────────────────────────────────
                 Row(children: [
                   TacticalLabel(
-                    widget.existing != null ? 'EDIT CREDENTIAL' : 'NEW CREDENTIAL',
+                    widget.existing != null ? 'EDIT PASSWORD' : 'NEW PASSWORD',
                     color: SFColors.textMuted,
                   ),
                   const Spacer(),
@@ -715,7 +718,7 @@ class _AddCredentialSheetState extends State<_AddCredentialSheet> {
                                   color: SFColors.textFaint))
                           : Text(
                               widget.existing != null
-                                  ? 'UPDATE CREDENTIAL'
+                                  ? 'UPDATE PASSWORD'
                                   : 'SAVE TO VAULT',
                               style: SFTypography.button.copyWith(
                                   color: SFColors.bgPrimary)),

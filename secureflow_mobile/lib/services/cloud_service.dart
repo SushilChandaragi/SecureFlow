@@ -16,6 +16,18 @@ class CloudServiceException implements Exception {
   String toString() => 'CloudServiceException: $message';
 }
 
+class CloudObjectInfo {
+  final String key;
+  final int sizeBytes;
+  final DateTime? lastModified;
+
+  const CloudObjectInfo({
+    required this.key,
+    required this.sizeBytes,
+    required this.lastModified,
+  });
+}
+
 class CloudService {
   final String bucketName;
   final String region;
@@ -41,9 +53,9 @@ class CloudService {
 
   // ── Inventory ──────────────────────────────────────────────────────────────
 
-  /// List all .enc object keys in the S3 bucket.
-  Future<List<String>> getVaultInventory() async {
-    final List<String> keys = [];
+  /// List all .enc objects in the S3 bucket with size and modified time.
+  Future<List<CloudObjectInfo>> getVaultInventory() async {
+    final List<CloudObjectInfo> objects = [];
     String? continuationToken;
 
     do {
@@ -68,10 +80,25 @@ class CloudService {
       }
 
       final body = response.body;
-      final keyMatches = RegExp(r'<Key>([^<]+)</Key>').allMatches(body);
-      for (final m in keyMatches) {
-        final key = m.group(1) ?? '';
-        if (key.toLowerCase().endsWith('.enc')) keys.add(key);
+      final contentsMatches = RegExp(r'<Contents>(.*?)</Contents>', dotAll: true)
+          .allMatches(body);
+      for (final m in contentsMatches) {
+        final block = m.group(1) ?? '';
+        final key = RegExp(r'<Key>([^<]+)</Key>').firstMatch(block)?.group(1) ?? '';
+        if (key.isEmpty || !key.toLowerCase().endsWith('.enc')) continue;
+
+        final sizeRaw = RegExp(r'<Size>(\d+)</Size>').firstMatch(block)?.group(1);
+        final size = int.tryParse(sizeRaw ?? '') ?? 0;
+        final lastRaw = RegExp(r'<LastModified>([^<]+)</LastModified>')
+            .firstMatch(block)
+            ?.group(1);
+        final lastModified = lastRaw == null ? null : DateTime.tryParse(lastRaw);
+
+        objects.add(CloudObjectInfo(
+          key: key,
+          sizeBytes: size,
+          lastModified: lastModified,
+        ));
       }
 
       final isTruncated = body.contains('<IsTruncated>true</IsTruncated>');
@@ -84,8 +111,8 @@ class CloudService {
       }
     } while (continuationToken != null);
 
-    keys.sort();
-    return keys;
+    objects.sort((a, b) => a.key.compareTo(b.key));
+    return objects;
   }
 
   // ── Download ───────────────────────────────────────────────────────────────

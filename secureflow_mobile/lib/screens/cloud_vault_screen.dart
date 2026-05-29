@@ -14,7 +14,6 @@ import '../models/vault_file.dart';
 import '../services/vault_provider.dart';
 import '../widgets/bento_card.dart';
 import '../widgets/tactical_label.dart';
-import '../widgets/sf_badge.dart';
 import 'document_viewer_screen.dart';
 
 class CloudVaultScreen extends ConsumerStatefulWidget {
@@ -312,22 +311,12 @@ class CloudFileCard extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Icon(_fileIcon(file.name), size: 20, color: SFColors.textMuted),
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(child: SFBadge(file.classification)),
-                    const SizedBox(width: 6),
-                    GestureDetector(
-                      onTap: () => _confirmDelete(context, ref),
-                      child: const Icon(
-                        Icons.delete_outline,
-                        size: 16,
-                        color: SFColors.textFaint,
-                      ),
-                    ),
-                  ],
+              GestureDetector(
+                onTap: () => _confirmDelete(context, ref),
+                child: const Icon(
+                  Icons.delete_outline,
+                  size: 16,
+                  color: SFColors.textFaint,
                 ),
               ),
             ],
@@ -339,10 +328,12 @@ class CloudFileCard extends ConsumerWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
-          const SizedBox(height: 4),
-          TacticalLabel(file.formattedSize, color: SFColors.textFaint),
+          if (file.sizeBytes > 0) ...[
+            const SizedBox(height: 4),
+            TacticalLabel(file.formattedSize, color: SFColors.textFaint),
+          ],
           if (file.lastModified != null) ...[
-            const SizedBox(height: 2),
+            const SizedBox(height: 4),
             TacticalLabel(
               _formatDate(file.lastModified!),
               color: SFColors.textFaint,

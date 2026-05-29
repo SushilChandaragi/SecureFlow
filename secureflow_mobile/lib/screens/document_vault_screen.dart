@@ -224,30 +224,33 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
-      floatingActionButton: _uploading
-          ? const SizedBox(
-              width: 52, height: 52,
-              child: CircularProgressIndicator(
-                  strokeWidth: 1.5, color: SFColors.textMuted),
-            )
-          : GestureDetector(
-              onTap: _showCloud ? _pickAndUpload : _pickAndStore,
-              child: Container(
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 84),
+        child: _uploading
+            ? const SizedBox(
                 width: 52, height: 52,
-                decoration: BoxDecoration(
-                  color: SFColors.textMain,
-                  borderRadius: BorderRadius.circular(SFRadius.pill),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withAlpha(100),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5, color: SFColors.textMuted),
+              )
+            : GestureDetector(
+                onTap: _showCloud ? _pickAndUpload : _pickAndStore,
+                child: Container(
+                  width: 52, height: 52,
+                  decoration: BoxDecoration(
+                    color: SFColors.textMain,
+                    borderRadius: BorderRadius.circular(SFRadius.pill),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha(100),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
                 ),
-                child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
               ),
-            ),
+      ),
       body: SafeArea(
         child: Stack(
           children: [
@@ -267,7 +270,7 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                             ? (filesAsync.valueOrNull != null
                                 ? '${filesAsync.value!.length} FILE${filesAsync.value!.length == 1 ? '' : 'S'} · S3 CLOUD'
                                 : 'CLOUD FILES · S3 CLOUD')
-                            : '${docs.length} DOCUMENT${docs.length == 1 ? '' : 'S'} · AES-256-GCM',
+                            : '${docs.length} DOCUMENT${docs.length == 1 ? '' : 'S'}',
                         style: SFTypography.metadata.copyWith(color: SFColors.textFaint),
                       ),
                     ],

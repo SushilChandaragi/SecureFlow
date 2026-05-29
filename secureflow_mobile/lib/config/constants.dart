@@ -9,16 +9,16 @@ abstract final class SFCopy {
   static const locked       = 'VAULT SEALED';
   static const unlocked     = 'ENCLAVE ACTIVE';
   static const sessionEnd   = 'SESSION TERMINATED. MEMORY PURGED.';
-  static const copying      = 'CREDENTIAL EXTRACTED';
+  static const copying      = 'COPIED TO CLIPBOARD';
   static const clipboardClr = 'CLIPBOARD SANITIZED';
   static const decrypting   = 'DECRYPTING ASSET...';
   static const purging      = 'MEMORY PURGE COMPLETE';
 
   // ── Empty States §12 ──────────────────────────────────────────────
   static const vaultEmpty     = 'VAULT IS STERILE. NO ASSETS DETECTED.';
-  static const passwordsEmpty = 'CREDENTIAL ARCHIVE EMPTY.';
+  static const passwordsEmpty = 'PASSWORD ARCHIVE EMPTY.';
   static const analyticsEmpty = 'NO THREAT VECTORS DETECTED.';
-  static const totpEmpty      = 'NO AUTH KEYS ENROLLED.';
+  static const totpEmpty      = 'NO MFA CODES ENROLLED.';
 
   // ── Loading State Terminal Output §13 ─────────────────────────────
   static const List<String> cryptoBootSequence = [

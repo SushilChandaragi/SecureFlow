@@ -233,7 +233,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                           children: [
                             TacticalLabel(
                               _isNfcScanning ? SFCopy.awaitingNfc : 'NFC KEY AUTHENTICATION',
-                              color: _isNfcScanning ? SFColors.success : SFColors.textMuted,
+                              color: SFColors.textMuted,
                             ),
                             const SizedBox(height: 4),
                             Text(

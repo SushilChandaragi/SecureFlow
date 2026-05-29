@@ -257,8 +257,13 @@ final vaultFilesProvider = FutureProvider<List<VaultFile>>((ref) async {
   final cloud = await ref.watch(cloudServiceProvider.future);
   if (cloud == null) return [];
   try {
-    final keys = await cloud.getVaultInventory();
-    return keys.map((k) => VaultFile(name: k, source: 'cloud')).toList();
+    final objects = await cloud.getVaultInventory();
+    return objects.map((obj) => VaultFile(
+      name: obj.key,
+      source: 'cloud',
+      sizeBytes: obj.sizeBytes,
+      lastModified: obj.lastModified,
+    )).toList();
   } catch (_) {
     return [];
   }

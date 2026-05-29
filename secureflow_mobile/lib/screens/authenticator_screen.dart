@@ -81,22 +81,25 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
 
     return Scaffold(
       backgroundColor: SFColors.bgPrimary,
-      floatingActionButton: GestureDetector(
-        onTap: () => _showAddSheet(),
-        child: Container(
-          width: 52, height: 52,
-          decoration: BoxDecoration(
-            color: SFColors.textMain,
-            borderRadius: BorderRadius.circular(SFRadius.pill),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(100),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 84),
+        child: GestureDetector(
+          onTap: () => _showAddSheet(),
+          child: Container(
+            width: 52, height: 52,
+            decoration: BoxDecoration(
+              color: SFColors.textMain,
+              borderRadius: BorderRadius.circular(SFRadius.pill),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(100),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
           ),
-          child: const Icon(Icons.add, color: SFColors.bgPrimary, size: 24),
         ),
       ),
       body: SafeArea(
@@ -108,7 +111,7 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('AUTHENTICATOR', style: SFTypography.h1),
+                  Text('MFA CODES', style: SFTypography.h1),
                 ],
               ),
             ),
@@ -132,7 +135,7 @@ class _AuthenticatorScreenState extends ConsumerState<AuthenticatorScreen> {
                             border: Border.all(color: SFColors.borderMedium),
                             borderRadius: BorderRadius.circular(SFRadius.small),
                           ),
-                          child: const TacticalLabel('TAP + TO ADD FIRST TOKEN',
+                            child: const TacticalLabel('TAP + TO ADD FIRST CODE',
                               color: SFColors.textMuted),
                         ),
                       ),
@@ -342,7 +345,7 @@ class _ConfirmDeleteDialog extends StatelessWidget {
         borderRadius: BorderRadius.circular(SFRadius.card),
         side: const BorderSide(color: SFColors.borderDanger),
       ),
-      title: Text('REMOVE TOKEN', style: SFTypography.cardTitle),
+      title: Text('REMOVE CODE', style: SFTypography.cardTitle),
       content: Text(
         'Delete "$name" from vault?\nThis cannot be undone.',
         style: SFTypography.bodyMuted,
@@ -441,7 +444,7 @@ class _AddTotpSheetState extends ConsumerState<_AddTotpSheet> {
     }
     setState(() => _scanning = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('INVALID QR — NOT A TOTP CODE')),
+      const SnackBar(content: Text('INVALID QR — NOT AN MFA CODE')),
     );
   }
 
@@ -499,7 +502,7 @@ class _AddTotpSheetState extends ConsumerState<_AddTotpSheet> {
               Row(
                 children: [
                   TacticalLabel(
-                    isEdit ? 'EDIT TOTP TOKEN' : 'ADD TOTP ACCOUNT',
+                    isEdit ? 'EDIT MFA CODE' : 'ADD MFA CODE',
                     color: SFColors.textMuted,
                   ),
                   const Spacer(),
@@ -545,7 +548,7 @@ class _AddTotpSheetState extends ConsumerState<_AddTotpSheet> {
                 const SizedBox(height: SFSpacing.md),
                 Center(
                   child: Text(
-                    'POINT CAMERA AT TOTP QR CODE',
+                    'POINT CAMERA AT MFA QR CODE',
                     style: SFTypography.metadata.copyWith(color: SFColors.textFaint),
                   ),
                 ),
@@ -593,7 +596,7 @@ class _AddTotpSheetState extends ConsumerState<_AddTotpSheet> {
                         ),
                       ),
                       child: Text(
-                        isEdit ? 'UPDATE TOKEN' : 'ADD TO VAULT',
+                        isEdit ? 'UPDATE CODE' : 'ADD TO VAULT',
                         style: SFTypography.button,
                       ),
                     ),
