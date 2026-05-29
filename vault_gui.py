@@ -7,6 +7,8 @@ import time
 import gc
 import logging
 import uuid
+import math
+from collections import deque
 from tkinter import filedialog, messagebox, TclError
 
 import queue
@@ -34,6 +36,8 @@ ML_MONITOR_INTERVAL_MS = 1500
 ML_BASELINE_MIN_SAMPLES = 120
 ML_ANOMALY_THRESHOLD = 0.6
 ML_ANOMALY_STREAK = 3
+ML_LOG_MAX_LINES = 200
+ML_FLIGHT_OUTLIER_THRESHOLD = 2.0
 
 
 COLORS = {
@@ -101,6 +105,17 @@ class VaultGUI(ctk.CTk):
         self._ml_baseline: list[list[float]] = []
         self._ml_model = None
         self._ml_anomaly_streak = 0
+        self._ml_feature_buffer: deque[list[float]] = deque(maxlen=ML_LOG_MAX_LINES)
+        self._ml_active_keys: dict[int, tuple[float, float]] = {}
+        self._ml_last_release_time: float | None = None
+        self._ml_window_active = False
+        self._ml_local_model = None
+        self._ml_local_model_ready = False
+        self._ml_model_path = Path("biometric_model.pkl")
+        self._ml_feature_log: ctk.CTkTextbox | None = None
+        self._ml_session_label: ctk.CTkLabel | None = None
+        self._ml_status_label: ctk.CTkLabel | None = None
+        self._ml_mode_label: ctk.CTkLabel | None = None
         self._is_closing = False
 
         # Thread-safe queue: bg threads post here, main thread drains every 50ms
@@ -113,6 +128,7 @@ class VaultGUI(ctk.CTk):
         self.configure(fg_color=COLORS["bg"])
 
         self._build_layout()
+        self._configure_ml_capture()
         self._update_totp_status()
         self._set_unlocked_state(self.crypto.is_unlocked,
                                   message="Vault is locked. Hardware tap required.")
@@ -673,8 +689,9 @@ class VaultGUI(ctk.CTk):
         self._render_totp_rows()
 
     def _build_ml_tab(self) -> None:
+        self.ml_chart_container = ctk.CTkFrame(self.ml_tab)
         self.ml_tab.grid_columnconfigure(0, weight=1)
-        self.ml_tab.grid_rowconfigure(1, weight=1)
+        self.ml_tab.grid_rowconfigure(2, weight=1)
 
         header = ctk.CTkFrame(self.ml_tab, fg_color=COLORS["panel"], corner_radius=12)
         header.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
@@ -687,25 +704,452 @@ class VaultGUI(ctk.CTk):
             text_color=COLORS["muted"],
         ).grid(row=0, column=0, sticky="w", padx=12, pady=12)
 
-        refresh_button = ctk.CTkButton(
-            header,
-            text="Refresh Data",
-            width=140,
-            fg_color=COLORS["panel_alt"],
-            hover_color=COLORS["panel_alt_hover"],
-            text_color=COLORS["text"],
-            border_width=1,
-            border_color=COLORS["border"],
-            command=self._refresh_ml_chart,
+        session_strip = ctk.CTkFrame(self.ml_tab, fg_color=COLORS["panel"], corner_radius=12)
+        session_strip.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
+        session_strip.grid_columnconfigure(0, weight=1)
+
+        self._ml_session_label = ctk.CTkLabel(
+            session_strip,
+            text="SecureFlow Session Monitoring: Paused",
+            font=FONTS["status"],
+            text_color=COLORS["muted"],
         )
-        refresh_button.grid(row=0, column=1, sticky="e", padx=12, pady=12)
+        self._ml_session_label.grid(row=0, column=0, sticky="w", padx=16, pady=12)
 
-        self.ml_chart_container = ctk.CTkFrame(self.ml_tab, fg_color=COLORS["panel"], corner_radius=12)
-        self.ml_chart_container.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
-        self.ml_chart_container.grid_columnconfigure(0, weight=1)
-        self.ml_chart_container.grid_rowconfigure(0, weight=1)
+        body = ctk.CTkFrame(self.ml_tab, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 16))
+        body.grid_columnconfigure(0, weight=2)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
 
-        self._refresh_ml_chart()
+        log_panel = ctk.CTkFrame(body, fg_color=COLORS["panel"], corner_radius=12)
+        log_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        log_panel.grid_columnconfigure(0, weight=1)
+        log_panel.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            log_panel,
+            text="Typing Cadence Signature Map (Live)",
+            font=FONTS["section"],
+            text_color=COLORS["muted"],
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
+
+        # Embedded Matplotlib Cadence Scatter Plot
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        import numpy as np
+
+        self._ml_dwell_history = []
+        self._ml_flight_history = []
+
+        self._ml_fig = Figure(figsize=(5.5, 3.2), dpi=100, facecolor=COLORS["panel"])
+        self._ml_ax = self._ml_fig.add_subplot(111)
+        self._ml_ax.set_facecolor(COLORS["panel_alt"])
+        self._ml_ax.spines['bottom'].set_color(COLORS["border"])
+        self._ml_ax.spines['top'].set_color(COLORS["border"])
+        self._ml_ax.spines['left'].set_color(COLORS["border"])
+        self._ml_ax.spines['right'].set_color(COLORS["border"])
+        self._ml_ax.tick_params(colors=COLORS["muted"], labelsize=8)
+        self._ml_ax.grid(True, color=COLORS["border"], linestyle="--", alpha=0.5)
+        self._ml_ax.set_xlabel("Flight Time (s)", color=COLORS["muted"], fontsize=9)
+        self._ml_ax.set_ylabel("Dwell Time (s)", color=COLORS["muted"], fontsize=9)
+
+        self._ml_scatter = self._ml_ax.scatter([], [], color=COLORS["accent"], edgecolors=COLORS["panel"], s=40, alpha=0.85)
+        self._ml_ax.set_xlim(-0.05, 0.6)
+        self._ml_ax.set_ylim(-0.02, 0.3)
+
+        self._ml_canvas = FigureCanvasTkAgg(self._ml_fig, master=log_panel)
+        self._ml_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
+
+        status_panel = ctk.CTkFrame(body, fg_color=COLORS["panel"], corner_radius=12)
+        status_panel.grid(row=0, column=1, sticky="nsew")
+        status_panel.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            status_panel,
+            text="EDR Security Status",
+            font=FONTS["section"],
+            text_color=COLORS["muted"],
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 12))
+
+        # Status Dial Frame
+        self.dial_frame = ctk.CTkFrame(status_panel, fg_color=COLORS["panel_alt"], corner_radius=8, height=80)
+        self.dial_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.dial_frame.grid_columnconfigure(0, weight=1)
+        self.dial_frame.grid_rowconfigure(0, weight=1)
+
+        self._ml_status_label = ctk.CTkLabel(
+            self.dial_frame,
+            text="Awaiting Telemetry...",
+            font=("Outfit", 16, "bold"),
+            text_color=COLORS["muted"]
+        )
+        self._ml_status_label.grid(row=0, column=0, padx=12, pady=16)
+
+        # Dynamic readouts frame
+        readouts_frame = ctk.CTkFrame(status_panel, fg_color="transparent")
+        readouts_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 12))
+        readouts_frame.grid_columnconfigure(0, weight=1)
+
+        self._ml_streak_label = ctk.CTkLabel(
+            readouts_frame,
+            text="Anomaly Streak: 0 / 3",
+            font=("Consolas", 12),
+            text_color=COLORS["text"],
+            anchor="w"
+        )
+        self._ml_streak_label.grid(row=0, column=0, sticky="w", pady=4)
+
+        self._ml_flag_count_label = ctk.CTkLabel(
+            readouts_frame,
+            text="Threat Flags Raised: 0 times",
+            font=("Consolas", 12),
+            text_color=COLORS["text"],
+            anchor="w"
+        )
+        self._ml_flag_count_label.grid(row=1, column=0, sticky="w", pady=4)
+
+        self._ml_score_label = ctk.CTkLabel(
+            readouts_frame,
+            text="Rhythm Score: 0.0000",
+            font=("Consolas", 12),
+            text_color=COLORS["text"],
+            anchor="w"
+        )
+        self._ml_score_label.grid(row=2, column=0, sticky="w", pady=4)
+
+        # Bottom model / path info
+        self._ml_mode_label = ctk.CTkLabel(
+            status_panel,
+            text="Mode: Continuous Authentication Active",
+            font=FONTS["mono"],
+            text_color=COLORS["muted"],
+            wraplength=280,
+            justify="left",
+        )
+        self._ml_mode_label.grid(row=3, column=0, sticky="nw", padx=16, pady=(12, 16))
+
+    def _configure_ml_capture(self) -> None:
+        self.bind("<FocusIn>", self._handle_ml_focus_in)
+        self.bind("<FocusOut>", self._handle_ml_focus_out)
+        self.bind_all("<KeyPress>", self._on_ml_key_press, add="+")
+        self.bind_all("<KeyRelease>", self._on_ml_key_release, add="+")
+        self._load_local_ml_model()
+
+        try:
+            self._set_ml_focus(self.focus_get() is not None)
+        except TclError:
+            self._set_ml_focus(False)
+
+        # Start Headless EDR IPC Listener Thread
+        self._ipc_running = True
+        self._ipc_thread = threading.Thread(target=self._start_ipc_listener, daemon=True)
+        self._ipc_thread.start()
+
+    def _start_ipc_listener(self) -> None:
+        import socket
+        import json
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(1.0)
+        try:
+            sock.bind(("127.0.0.1", 54321))
+        except Exception as e:
+            logger.warning("EDR IPC Listener failed to bind to port 54321: %s", e)
+            return
+
+        while hasattr(self, "_ipc_running") and self._ipc_running:
+            if getattr(self, "_is_closing", False):
+                break
+            try:
+                data, addr = sock.recvfrom(2048)
+                payload = json.loads(data.decode("utf-8"))
+                
+                dwell = payload.get("dwell", 0.0)
+                flight = payload.get("flight", 0.0)
+                streak = payload.get("streak", 0)
+                status = payload.get("status", "Owner Valid")
+                flagged_count = payload.get("flagged_count", 0)
+                score = payload.get("score", 0.0)
+                
+                self.after_idle(lambda d=dwell, f=flight, s=streak, st=status, fc=flagged_count, sc=score: 
+                                self._update_ipc_ui(d, f, s, st, fc, sc))
+            except socket.timeout:
+                continue
+            except Exception:
+                if getattr(self, "_is_closing", False):
+                    break
+                continue
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+    def _update_ipc_ui(self, dwell: float, flight: float, streak: int, status: str, flagged_count: int, score: float) -> None:
+        if getattr(self, "_is_closing", False) or not self.winfo_exists():
+            return
+        
+        import numpy as np
+        import math
+        self._ml_dwell_history.append(dwell)
+        if not math.isnan(flight):
+            self._ml_flight_history.append(flight)
+        else:
+            self._ml_flight_history.append(0.0)
+
+        if len(self._ml_dwell_history) > 60:
+            self._ml_dwell_history.pop(0)
+            self._ml_flight_history.pop(0)
+
+        self._ml_scatter.set_offsets(np.c_[self._ml_flight_history, self._ml_dwell_history])
+        self._ml_canvas.draw_idle()
+
+        # Update dynamic security dashboard widgets
+        is_threat = "intruder" in status.lower() or "anomalous" in status.lower() or streak > 0
+        if is_threat:
+            status_text = f"INTRUDER INVALID ⚠ ({streak}/3)"
+            status_color = COLORS["danger"]
+        else:
+            status_text = "Owner Valid ✓"
+            status_color = COLORS["success"]
+
+        self._ml_status_label.configure(text=status_text, text_color=status_color)
+        self._ml_streak_label.configure(text=f"Anomaly Streak: {streak} / 3")
+        self._ml_flag_count_label.configure(text=f"Threat Flags Raised: {flagged_count} times")
+        self._ml_score_label.configure(text=f"Rhythm Score: {score:+.4f}")
+
+    def _handle_ml_focus_in(self, event) -> None:
+        if event.widget == self:
+            self._set_ml_focus(True)
+
+    def _handle_ml_focus_out(self, event) -> None:
+        if event.widget == self:
+            # Shift focus internally between widgets inside SecureFlow should not clear states.
+            # We verify after a short delay if the focus has truly exited the top-level window.
+            self.after(100, self._verify_ml_focus_loss)
+
+    def _verify_ml_focus_loss(self) -> None:
+        try:
+            focused = self.focus_get()
+        except TclError:
+            focused = None
+        if focused is None:
+            self._set_ml_focus(False)
+
+    def _set_ml_focus(self, active: bool) -> None:
+        self._ml_window_active = active
+        if self._ml_session_label is not None:
+            text = "SecureFlow Session Monitoring: Active" if active else "SecureFlow Session Monitoring: Paused"
+            color = COLORS["success"] if active else COLORS["muted"]
+            self._ml_session_label.configure(text=text, text_color=color)
+        if not active:
+            self._ml_active_keys.clear()
+            self._ml_last_release_time = None
+
+    def _on_ml_key_press(self, event) -> None:
+        if self._is_closing or not self._ml_window_active:
+            return
+        keycode = getattr(event, "keycode", None)
+        if keycode is None:
+            return
+        if keycode in self._ml_active_keys:
+            return
+
+        now = time.perf_counter()
+        if self._ml_last_release_time is not None:
+            flight_time = now - self._ml_last_release_time
+        else:
+            flight_time = 0.0
+        self._ml_active_keys[int(keycode)] = (now, flight_time)
+
+    def _on_ml_key_release(self, event) -> None:
+        if self._is_closing or not self._ml_window_active:
+            return
+        keycode = getattr(event, "keycode", None)
+        if keycode is None:
+            return
+        entry = self._ml_active_keys.pop(int(keycode), None)
+        if entry is None:
+            return
+
+        press_time, flight_time = entry
+        now = time.perf_counter()
+        dwell_time = now - press_time
+        self._ml_last_release_time = now
+
+        is_outlier = flight_time > ML_FLIGHT_OUTLIER_THRESHOLD
+        flight_value = math.nan if is_outlier else flight_time
+        vector = [float(dwell_time), float(flight_value)]
+        self._ml_feature_buffer.append(vector)
+        self._append_ml_feature(vector, is_outlier)
+
+        if not is_outlier:
+            self._evaluate_ml_vector(vector)
+
+    def _append_ml_feature(self, vector: list[float], is_outlier: bool) -> None:
+        if not hasattr(self, "_ml_canvas") or self._ml_canvas is None:
+            return
+
+        import numpy as np
+        dwell_val, flight_val = vector
+        self._ml_dwell_history.append(dwell_val)
+        if not math.isnan(flight_val):
+            self._ml_flight_history.append(flight_val)
+        else:
+            self._ml_flight_history.append(0.0) # Map outline outliers to 0.0
+
+        if len(self._ml_dwell_history) > 60:
+            self._ml_dwell_history.pop(0)
+            self._ml_flight_history.pop(0)
+
+        # Update scatter plot data points
+        self._ml_scatter.set_offsets(np.c_[self._ml_flight_history, self._ml_dwell_history])
+        self._ml_canvas.draw_idle()
+
+    def _load_local_ml_model(self) -> None:
+        self._ml_local_model = None
+        self._ml_local_model_ready = False
+
+        if not self._ml_model_path.is_file():
+            self._update_ml_mode(
+                "Validation / Calibration Mode: Model File Pending Placement",
+                is_error=False,
+            )
+            return
+
+        try:
+            import joblib
+        except Exception as exc:
+            self._update_ml_mode(
+                "Validation / Calibration Mode: joblib not available",
+                is_error=True,
+            )
+            logger.warning("ML model load skipped: %s", exc)
+            return
+
+        try:
+            self._ml_local_model = joblib.load(self._ml_model_path)
+            self._ml_local_model_ready = True
+            self._update_ml_mode("Model loaded: Real-time inference active", is_error=False)
+        except Exception as exc:
+            self._update_ml_mode(
+                f"Validation / Calibration Mode: Model load failed ({exc})",
+                is_error=True,
+            )
+            logger.warning("ML model load failed: %s", exc)
+
+    def _update_ml_mode(self, message: str, is_error: bool) -> None:
+        if self._ml_mode_label is None:
+            return
+        color = COLORS["danger"] if is_error else COLORS["muted"]
+        self._ml_mode_label.configure(text=message, text_color=color)
+
+        if not self._ml_local_model_ready:
+            self._update_ml_status("Status: Validation / Calibration Mode", status="neutral")
+
+    def _update_ml_status(self, message: str, status: str) -> None:
+        if self._ml_status_label is None:
+            return
+        if status == "ok":
+            color = COLORS["success"]
+        elif status == "alert":
+            color = COLORS["danger"]
+        else:
+            color = COLORS["muted"]
+        self._ml_status_label.configure(text=message, text_color=color)
+
+    def _evaluate_ml_vector(self, vector: list[float]) -> None:
+        if not self._ml_local_model_ready or self._ml_local_model is None:
+            dwell, flight = vector
+            flight_str = "nan" if math.isnan(flight) else f"{flight:.3f}"
+            self._update_ml_status(
+                f"Calibration Mode — Dwell: {dwell:.3f}s, Flight: {flight_str}s",
+                status="neutral"
+            )
+            return
+
+        try:
+            pipeline = self._ml_local_model
+            if isinstance(pipeline, dict):
+                model   = pipeline.get("model")
+                scaler  = pipeline.get("scaler")
+                W       = pipeline.get("window_size", 8)
+                features = pipeline.get("features", [])
+                n_feat   = len(features) if features else 10
+                threshold = pipeline.get("threshold_score", 0.0)
+            else:
+                model   = pipeline
+                scaler  = None
+                W       = 8
+                n_feat   = getattr(model, "n_features_in_", 2)
+                threshold = 0.0
+
+            # Need enough clean samples in the buffer for the rolling window
+            clean = [v for v in self._ml_feature_buffer if not math.isnan(v[1])]
+            if len(clean) < W:
+                self._update_ml_status(
+                    f"Collecting buffer... ({len(clean)}/{W})",
+                    status="neutral"
+                )
+                return
+
+            import numpy as np
+            dwells  = [v[0] for v in clean[-W:]]
+            flights = [v[1] for v in clean[-W:]]
+
+            if n_feat == 10:
+                # Matches biometric_model.pkl exactly
+                # features: dwell_mean, dwell_std, dwell_min, dwell_max, dwell_median,
+                #           flight_mean, flight_std, flight_min, flight_median, rhythm_ratio
+                dm = np.mean(dwells)
+                ds = np.std(dwells)
+                dn = np.min(dwells)
+                dx = np.max(dwells)
+                dmed = np.median(dwells)
+                fm = np.mean(flights)
+                fs = np.std(flights)
+                fn = np.min(flights)
+                fmed = np.median(flights)
+                rr = dm / (fm + 1e-6)
+                vec = [[dm, ds, dn, dx, dmed, fm, fs, fn, fmed, rr]]
+
+            elif n_feat == 6:
+                dm = np.mean(dwells)
+                ds = np.std(dwells)
+                fm = np.mean(flights)
+                fs = np.std(flights)
+                p25 = float(np.percentile(dwells, 25))
+                p75 = float(np.percentile(dwells, 75))
+                vec = [[dm, ds, fm, fs, p25, p75]]
+
+            else:
+                # 2-feature fallback
+                vec = [vector]
+
+            if scaler is not None:
+                vec = scaler.transform(vec)
+
+            # Using IsolationForest's decision_function score
+            score = 0.0
+            if hasattr(model, "decision_function"):
+                score = model.decision_function(vec)[0]
+                is_verified = float(score) >= threshold
+            else:
+                # Fallback to predict
+                prediction = model.predict(vec)
+                label = prediction[0] if hasattr(prediction, "__len__") else prediction
+                is_verified = float(label) > 0
+                score = 1.0 if is_verified else -1.0
+
+            if is_verified:
+                self._update_ml_status("Status: Operator Cadence Verified ✓", status="ok")
+            else:
+                self._update_ml_status(
+                    f"Status: Cadence Variance Detected (score={score:.3f})",
+                    status="alert"
+                )
+        except Exception as exc:
+            self._update_ml_status("Status: Model inference error", status="alert")
+            logger.warning("ML inference error: %s", exc)
 
     def _set_status_message(self, message: str, is_error: bool = False) -> None:
         color = COLORS["danger"] if is_error else COLORS["muted"]
@@ -1077,6 +1521,7 @@ class VaultGUI(ctk.CTk):
         self._ml_monitor_id = self._schedule_after(ML_MONITOR_INTERVAL_MS, self._monitor_ml_anomalies)
 
     def _stop_ml_monitor(self) -> None:
+        self._ipc_running = False
         if self._ml_monitor_id is not None:
             self.after_cancel(self._ml_monitor_id)
             self._ml_monitor_id = None

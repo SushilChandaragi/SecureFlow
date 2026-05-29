@@ -30,6 +30,16 @@ def main() -> None:
 
     engine = CryptoEngine()
 
+    # Automatically spawn the Global Continuous Authentication EDR Agent as a decoupled background process.
+    import subprocess
+    try:
+        agent_script = base_dir / "global_agent.py"
+        if agent_script.is_file():
+            logging.info("Spawning SecureFlow Continuous Authentication EDR Agent background process...")
+            subprocess.Popen([sys.executable, str(agent_script)])
+    except Exception as e:
+        logging.error("Failed to automatically spawn EDR agent: %s", e)
+
     app = VaultGUI(engine)
     try:
         app.mainloop()
