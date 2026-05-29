@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 
 void main() {
   testWidgets('App renders without crashing', (WidgetTester tester) async {
-    await tester.pumpWidget(const ProviderScope(child: SecureFlowApp()));
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.byType(MaterialApp), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.pumpWidget(const ProviderScope(child: SecureFlowApp()));
+      expect(find.byType(MaterialApp), findsOneWidget);
+    });
   });
 }
+

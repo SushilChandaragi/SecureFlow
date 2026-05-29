@@ -14,6 +14,7 @@ import 'password_vault_screen.dart';
 import 'authenticator_screen.dart';
 import 'document_vault_screen.dart';
 import 'settings_screen.dart';
+import 'cloud_vault_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -203,10 +204,17 @@ class _VaultHome extends ConsumerWidget {
         // ── Cloud Vault (live data) ───────────────────────────────────
         const _SectionHeader('CLOUD VAULT'),
         const SizedBox(height: SFSpacing.md),
-        _CloudStatusCard(
-          count: cloudCount,
-          isLoading: cloudLoading,
-          hasError: cloudError,
+        GestureDetector(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CloudVaultScreen()),
+            );
+          },
+          child: _CloudStatusCard(
+            count: cloudCount,
+            isLoading: cloudLoading,
+            hasError: cloudError,
+          ),
         ),
 
         const SizedBox(height: SFSpacing.xl),

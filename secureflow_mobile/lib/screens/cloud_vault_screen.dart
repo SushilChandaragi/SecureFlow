@@ -125,17 +125,38 @@ class _CloudVaultScreenState extends ConsumerState<CloudVaultScreen> {
                   ),
                 ),
                 Expanded(
-                  child: filesAsync.when(
-                    data: (files) => files.isEmpty
-                        ? _EmptyState(onUpload: _pickAndUpload)
-                        : _FileGrid(files: files),
-                    loading: () => const Center(
-                      child: CircularProgressIndicator(
-                          strokeWidth: 1, color: SFColors.textMuted),
-                    ),
-                    error: (e, _) => Center(
-                      child: Text('ERROR: $e',
-                          style: SFTypography.metadata.copyWith(color: SFColors.danger)),
+                  child: RefreshIndicator(
+                    color: SFColors.textMain,
+                    backgroundColor: SFColors.bgCard,
+                    strokeWidth: 1.5,
+                    onRefresh: () async {
+                      ref.invalidate(vaultFilesProvider);
+                      // Wait for the new future to settle before releasing indicator.
+                      // The catchError must return List<VaultFile> to satisfy the type system.
+                      await ref
+                          .read(vaultFilesProvider.future)
+                          .catchError((_) => <VaultFile>[]);
+                    },
+                    child: filesAsync.when(
+                      data: (files) => files.isEmpty
+                          ? CloudEmptyState(onUpload: _pickAndUpload)
+                          : CloudFileGrid(files: files),
+                      loading: () => const Center(
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1, color: SFColors.textMuted),
+                      ),
+                      error: (e, _) => ListView(
+                        // ListView is needed so RefreshIndicator has a scrollable
+                        // child to attach its overscroll gesture to.
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(SFSpacing.xl),
+                            child: Text('ERROR: $e',
+                                style: SFTypography.metadata
+                                    .copyWith(color: SFColors.danger)),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -179,9 +200,9 @@ class _CloudVaultScreenState extends ConsumerState<CloudVaultScreen> {
   }
 }
 
-class _FileGrid extends StatelessWidget {
+class CloudFileGrid extends StatelessWidget {
   final List<VaultFile> files;
-  const _FileGrid({required this.files});
+  const CloudFileGrid({super.key, required this.files});
 
   @override
   Widget build(BuildContext context) {
@@ -193,15 +214,15 @@ class _FileGrid extends StatelessWidget {
         mainAxisSpacing: SFSpacing.base,
         crossAxisSpacing: SFSpacing.base,
         itemCount: files.length,
-        itemBuilder: (_, i) => _FileCard(file: files[i]),
+        itemBuilder: (_, i) => CloudFileCard(file: files[i]),
       ),
     );
   }
 }
 
-class _FileCard extends ConsumerWidget {
+class CloudFileCard extends ConsumerWidget {
   final VaultFile file;
-  const _FileCard({required this.file});
+  const CloudFileCard({super.key, required this.file});
 
   Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
     final confirm = await showDialog<bool>(
@@ -286,20 +307,23 @@ class _FileCard extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Icon(_fileIcon(file.name), size: 20, color: SFColors.textMuted),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(child: SFBadge(file.classification)),
-                  const SizedBox(width: 6),
-                  GestureDetector(
-                    onTap: () => _confirmDelete(context, ref),
-                    child: const Icon(
-                      Icons.delete_outline,
-                      size: 16,
-                      color: SFColors.textFaint,
+              Expanded(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(child: SFBadge(file.classification)),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: () => _confirmDelete(context, ref),
+                      child: const Icon(
+                        Icons.delete_outline,
+                        size: 16,
+                        color: SFColors.textFaint,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           ),
@@ -338,9 +362,9 @@ class _FileCard extends ConsumerWidget {
   }
 }
 
-class _EmptyState extends StatelessWidget {
+class CloudEmptyState extends StatelessWidget {
   final VoidCallback onUpload;
-  const _EmptyState({required this.onUpload});
+  const CloudEmptyState({super.key, required this.onUpload});
 
   @override
   Widget build(BuildContext context) {

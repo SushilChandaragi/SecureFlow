@@ -679,10 +679,16 @@ class _AwsConfigSheetState extends State<_AwsConfigSheet> {
                     ),
                     const SizedBox(height: SFSpacing.md),
                   ],
-                  TextFormField(
+                   TextFormField(
                     controller: _sharedSecretCtrl,
                     obscureText: _secretObscure,
                     style: SFTypography.terminal.copyWith(fontSize: 12, color: SFColors.textMain),
+                    validator: (v) {
+                      if (v != null && RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(v.trim())) {
+                        return '⚠️ ENTER RAW SECRET, NOT MVK HEX!';
+                      }
+                      return null;
+                    },
                     decoration: InputDecoration(
                       labelText: 'VAULT SHARED SECRET',
                       labelStyle: SFTypography.metadata.copyWith(color: SFColors.textFaint),

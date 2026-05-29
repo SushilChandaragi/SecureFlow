@@ -241,6 +241,18 @@ class VaultGUI(ctk.CTk):
         )
         self.encrypt_button.grid(row=3, column=0, sticky="ew", padx=16, pady=6)
 
+        self.upload_cloud_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="☁ Upload to Cloud",
+            fg_color=COLORS["panel_alt"],
+            hover_color=COLORS["panel_alt_hover"],
+            text_color=COLORS["text"],
+            border_width=1,
+            border_color=COLORS["border"],
+            command=self._on_upload_to_cloud,
+        )
+        self.upload_cloud_button.grid(row=4, column=0, sticky="ew", padx=16, pady=6)
+
         self.pair_button = ctk.CTkButton(
             self.sidebar_frame,
             text="📱 Pair Mobile Companion",
@@ -251,9 +263,9 @@ class VaultGUI(ctk.CTk):
             border_color=COLORS["border"],
             command=self._on_pair_click,
         )
-        self.pair_button.grid(row=4, column=0, sticky="ew", padx=16, pady=6)
+        self.pair_button.grid(row=5, column=0, sticky="ew", padx=16, pady=6)
 
-        ctk.CTkFrame(self.sidebar_frame, fg_color="transparent").grid(row=5, column=0, sticky="nsew")
+        ctk.CTkFrame(self.sidebar_frame, fg_color="transparent").grid(row=6, column=0, sticky="nsew")
 
         self.panic_button = ctk.CTkButton(
             self.sidebar_frame,
@@ -263,7 +275,7 @@ class VaultGUI(ctk.CTk):
             text_color=COLORS["text"],
             command=self._on_panic,
         )
-        self.panic_button.grid(row=6, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.panic_button.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 16))
 
         self.main_frame = ctk.CTkFrame(self, fg_color=COLORS["panel_alt"], corner_radius=14)
         self.main_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 16), pady=16)
@@ -1613,6 +1625,82 @@ class VaultGUI(ctk.CTk):
             self._log_event(f"Encrypt failed: {exc}")
             logger.exception("Encrypt failed")
 
+    def _on_upload_to_cloud(self) -> None:
+        """Pick one or more already-encrypted .enc files and upload them to S3.
+
+        Only files that already exist in the vault directory are selectable.
+        The upload runs on a background thread so the UI stays responsive.
+        """
+        if not self.crypto.is_unlocked:
+            self._set_unlocked_state(False, message="Vault is locked. Hardware tap required.")
+            return
+
+        if not self.cloud:
+            messagebox.showerror(
+                "Cloud Not Configured",
+                "AWS S3 credentials are not set.\n\n"
+                "Check your .env file for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, "
+                "AWS_DEFAULT_REGION, and S3_BUCKET_NAME.",
+            )
+            return
+
+        # Default to the vault directory so the user sees only vault files.
+        vault_dir = str(self.crypto.vault_dir)
+        filepaths = filedialog.askopenfilenames(
+            title="Select encrypted file(s) to upload",
+            initialdir=vault_dir,
+            filetypes=[("Encrypted vault files", "*.enc"), ("All Files", "*.*")],
+        )
+        if not filepaths:
+            return
+
+        # Skip internal store files — they must never leave the local vault.
+        skip = {AUTH_STORE_FILENAME, PASSWORD_STORE_FILENAME}
+        selected = [p for p in filepaths if Path(p).name not in skip]
+        if not selected:
+            messagebox.showwarning(
+                "Nothing to Upload",
+                "The selected file(s) are internal vault stores and cannot be uploaded.",
+            )
+            return
+
+        names = ", ".join(Path(p).name for p in selected)
+        self._set_status_message(f"Uploading {len(selected)} file(s) to AWS...")
+        self._log_event(f"Manual cloud upload started: {names}")
+        self.upload_cloud_button.configure(state="disabled", text="Uploading...")
+
+        def _do_upload():
+            results = []
+            for filepath in selected:
+                path = Path(filepath)
+                try:
+                    self.cloud.upload_vault_file(str(path), path.name, delete_local=False)
+                    results.append((path.name, None))
+                except (CloudManagerError, Exception) as exc:
+                    results.append((path.name, exc))
+            return results
+
+        def _on_done(results):
+            self.upload_cloud_button.configure(state="normal", text="☁ Upload to Cloud")
+            errors = [(n, e) for n, e in results if e is not None]
+            ok    = [(n, e) for n, e in results if e is None]
+            for name, _ in ok:
+                self._log_event(f"Uploaded to cloud: {name}")
+            if errors:
+                detail = "\n".join(f"{n}: {e}" for n, e in errors)
+                self._set_status_message(f"{len(errors)} upload(s) failed.", is_error=True)
+                messagebox.showerror("Upload Errors", detail)
+            else:
+                self._set_status_message(f"Uploaded {len(ok)} file(s) successfully.")
+            self.refresh_vault_listing()
+
+        def _on_error(exc):
+            self.upload_cloud_button.configure(state="normal", text="☁ Upload to Cloud")
+            self._set_status_message(str(exc), is_error=True)
+            messagebox.showerror("Upload Failed", str(exc))
+
+        self._run_in_thread(_do_upload, on_done=_on_done, on_error=_on_error)
+
     def refresh_vault_listing(self) -> None:
         for child in self.vault_list_frame.winfo_children():
             child.destroy()
@@ -1773,6 +1861,10 @@ class VaultGUI(ctk.CTk):
         self.zoom_label.configure(text=f"{percent}%")
 
     def _on_panic(self) -> None:
+        # Flush unsaved in-memory data BEFORE wiping the key, otherwise the
+        # is_unlocked guard inside each save method silently aborts the write.
+        self._save_passwords_to_vault()
+        self._save_totp_store_to_vault()
         # Wipe key material and remove any decrypted content from the UI.
         self.crypto.lock_vault()
         self._hardware_port = ""
@@ -1780,8 +1872,12 @@ class VaultGUI(ctk.CTk):
         self._log_event("Vault locked. RAM key wiped with memset.")
 
     def _on_close(self) -> None:
-        # Always wipe key material when exiting.
         self._is_closing = True
+        # Flush unsaved in-memory data BEFORE wiping the key so the
+        # is_unlocked guard inside each save method doesn't abort the write.
+        self._save_passwords_to_vault()
+        self._save_totp_store_to_vault()
+        # Wipe key material after saves are complete.
         self.crypto.lock_vault()
         self._stop_hardware_monitor()
         self._stop_ml_monitor()

@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 from typing import List, Optional
 
 import boto3
@@ -48,12 +49,23 @@ class CloudManager:
     ) -> None:
         """Upload a local .enc file to S3.
 
+        The S3 object key is sanitised to RFC-3986-safe characters (spaces and
+        special characters replaced with underscores) so that the Dart
+        aws_signature_v4 signer can sign the download request correctly on
+        mobile.  The local file is never renamed — only the S3 key changes.
+
         If delete_local is True, the local file is removed after upload.
         """
         if not os.path.isfile(local_filepath):
             raise CloudManagerError(f"Local file not found: {local_filepath}")
 
-        key = object_name or os.path.basename(local_filepath)
+        raw_key = object_name or os.path.basename(local_filepath)
+        # Replace any character outside A-Z a-z 0-9 . _ - with underscore.
+        # This guarantees the S3 key is valid for SigV4 canonical path signing
+        # on all clients (boto3, aws_signature_v4 Dart, etc.).
+        key = re.sub(r"[^A-Za-z0-9._-]", "_", raw_key)
+        if key != raw_key:
+            logger.info("S3 key sanitised: '%s' -> '%s'", raw_key, key)
         try:
             self._s3.upload_file(local_filepath, self._bucket, key)
         except (ClientError, NoCredentialsError, EndpointConnectionError) as exc:

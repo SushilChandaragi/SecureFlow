@@ -160,32 +160,70 @@ class CryptoService {
 
     // The blob carries hsNonce so we can always re-derive the exact key,
     // even across sessions. We NEVER require nonce equality anymore.
-    Uint8List derivedKey;
+    Uint8List? derivedKey;
+
     if (mode == _kModeMock) {
       // Re-derive using stored hardware secret + blob's own nonce.
       if (_hardwareSecret == null) {
         throw const CryptoServiceException(
-            'Mock hardware secret not available — re-authenticate with biometric.');
+            'Desktop vault secret not available.\n'
+            'Go to Settings → Configure AWS Credentials and paste the Desktop Vault Secret:\n'
+            'SecureFlow-Mock-Secret-Change-Me-Use-High-Entropy');
       }
       derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
-    } else {
-      // NFC/Hardware mode: re-derive from stored NFC payload + blob's nonce.
-      if (_nfcPayload == null) {
-        throw const CryptoServiceException(
-            'NFC payload not available — re-authenticate with NFC.');
+    } else if (mode == _kModeHardware && _hardwareSecret != null) {
+      // Mode H (ESP32 hardware) — but we have the desktop secret.
+      // First try: Try simulated hardware derivation (pyserial COM MOCK port mode):
+      // HMAC_response = HMAC-SHA256(key = _hardwareSecret, msg = hsNonce)
+      // IKM = HMAC_response + hsNonce
+      try {
+        final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(_hardwareSecret!));
+        final hmacResp = hmac.process(hsNonce);
+        final ikm = Uint8List(_kHandshakeNonce * 2)
+          ..setRange(0, _kHandshakeNonce, hmacResp)
+          ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
+        derivedKey = _hkdfDeriveFromIkm(ikm);
+        return _aesGcmDecrypt(derivedKey, fileNonce, ct);
+      } catch (_) {
+        // Fall back to Mock derivation if simulated hardware fails
+        derivedKey?.fillRange(0, derivedKey.length, 0);
+        derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
       }
+    } else if (mode == _kModeHardware && _nfcPayload != null) {
+      // Hardware mode, no desktop secret — use NFC payload.
       final ikm = Uint8List(_kHandshakeNonce * 2)
         ..setRange(0, _kHandshakeNonce, _nfcPayload!)
         ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
       derivedKey = _hkdfDeriveFromIkm(ikm);
+    } else {
+      throw const CryptoServiceException(
+          'Cannot decrypt hardware-mode file:\n'
+          '• If encrypted with ESP32: Pair the desktop via QR code in Settings.\n'
+          '• If encrypted with desktop software: Set the Desktop Vault Secret in Settings.');
     }
 
     try {
       return _aesGcmDecrypt(derivedKey, fileNonce, ct);
+    } on CryptoServiceException {
+      // If mock-key fallback failed for Mode H, try NFC payload if we have it.
+      if (mode == _kModeHardware && _hardwareSecret != null && _nfcPayload != null) {
+        derivedKey.fillRange(0, derivedKey.length, 0);
+        final ikm = Uint8List(_kHandshakeNonce * 2)
+          ..setRange(0, _kHandshakeNonce, _nfcPayload!)
+          ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
+        final nfcKey = _hkdfDeriveFromIkm(ikm);
+        try {
+          return _aesGcmDecrypt(nfcKey, fileNonce, ct);
+        } finally {
+          nfcKey.fillRange(0, nfcKey.length, 0);
+        }
+      }
+      rethrow;
     } finally {
       derivedKey.fillRange(0, derivedKey.length, 0);
     }
   }
+
 
   /// Decrypt a V2 blob: [SFV2][32B hs-nonce][12B file-nonce][ct+tag]
   Uint8List _decryptV2(Uint8List blob) {
