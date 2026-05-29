@@ -208,8 +208,8 @@ class GlobalEDRAgent:
                 print(f"[WARNING] Anomaly flagged! Score: {score:.4f} | Streak: {self.anomaly_streak}/{STREAK_LIMIT}")
 
                 if self.anomaly_streak >= STREAK_LIMIT:
-                    print("[INTERDICTION] Anomaly streak limit reached! Executing OS lockout.")
-                    self.execute_lockdown()
+                    print(f"[AUDIT ALERT] Consecutive anomalous typing signatures detected (Streak: {self.anomaly_streak}/3). Logging passive warning.")
+                    self.log_security_audit(score, self.anomaly_streak)
 
             # Broadcast live telemetry over local UDP socket IPC
             self.send_telemetry_ipc(dwell, flight, self.anomaly_streak, status, self.flagged_count, score)
@@ -217,13 +217,18 @@ class GlobalEDRAgent:
         except Exception as e:
             print(f"[EDR Error] Inference loop failure: {e}")
 
-    def execute_lockdown(self) -> None:
-        """Immediately locks the active Windows session to prevent unauthorized access."""
+    def log_security_audit(self, score: float, streak: int) -> None:
+        """Safely appends a passive audit alert entry to security_audit.log for developer review."""
         try:
-            self.anomaly_streak = 0
-            ctypes.windll.user32.LockWorkStation()
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_line = f"[{timestamp}] [AUDIT ALERT] Anomalous Typing Cadence Detected system-wide! Anomaly Score: {score:+.4f} | Anomaly Streak: {streak}/3 (Passive Mode: Lockout Skipped)\n"
+            
+            with open("security_audit.log", "a", encoding="utf-8") as f:
+                f.write(log_line)
+            print(f"[AUDIT LOGGED] {log_line.strip()}")
         except Exception as e:
-            print(f"[EDR Error] Failed to lock workstation: {e}")
+            print(f"[EDR Error] Failed to write to security_audit.log: {e}")
 
 def run_system_tray(agent: GlobalEDRAgent) -> None:
     """Instantiates non-blocking system tray module indicating active protection."""
