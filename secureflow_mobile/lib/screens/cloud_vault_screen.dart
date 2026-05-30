@@ -74,7 +74,8 @@ class _CloudVaultScreenState extends ConsumerState<CloudVaultScreen> {
           ? crypto.encryptToBlob(bytes)
           : bytes; // No vault key — upload raw (user should see warning)
 
-      await cloud.uploadVaultFile(encrypted, file.name);
+      final uploadName = file.name.endsWith('.enc') ? file.name : '${file.name}.enc';
+      await cloud.uploadVaultFile(encrypted, uploadName);
 
       // Refresh the file list
       ref.invalidate(vaultFilesProvider);
@@ -84,7 +85,7 @@ class _CloudVaultScreenState extends ConsumerState<CloudVaultScreen> {
         SnackBar(
           backgroundColor: SFColors.bgCard,
           content: Text(
-            'UPLOADED: ${file.name}',
+            'UPLOADED: $uploadName',
             style: SFTypography.metadata.copyWith(color: SFColors.success),
           ),
         ),

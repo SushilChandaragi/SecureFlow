@@ -181,12 +181,21 @@ class CryptoService {
     final ct        = blob.sublist(5 + _kHandshakeNonce + _kFileNonce);
     final mode      = blob[4];
 
-    // The blob carries hsNonce so we can always re-derive the exact key,
-    // even across sessions. We NEVER require nonce equality anymore.
+    print('[SecureFlow] CryptoService: Decrypting V3 Blob. Mode: ${String.fromCharCode(mode)} (0x${mode.toRadixString(16)})');
+    print('[SecureFlow] CryptoService: Handshake Nonce Hex: ${hsNonce.map((b) => b.toRadixString(16).padLeft(2, "0")).join("")}');
+    print('[SecureFlow] CryptoService: File Nonce Hex: ${fileNonce.map((b) => b.toRadixString(16).padLeft(2, "0")).join("")}');
+    print('[SecureFlow] CryptoService: Hardware Secret is Null: ${_hardwareSecret == null}');
+    
+    if (_hardwareSecret != null) {
+      final secretStr = String.fromCharCodes(_hardwareSecret!);
+      print('[SecureFlow] CryptoService: Hardware Secret Length: ${_hardwareSecret!.length} bytes');
+      print('[SecureFlow] CryptoService: Hardware Secret String: "$secretStr"');
+      print('[SecureFlow] CryptoService: Hardware Secret Hex: ${_hardwareSecret!.map((b) => b.toRadixString(16).padLeft(2, "0")).join("")}');
+    }
+
     Uint8List? derivedKey;
 
     if (mode == _kModeMock) {
-      // Re-derive using stored hardware secret + blob's own nonce.
       if (_hardwareSecret == null) {
         throw const CryptoServiceException(
             'Desktop vault secret not available.\n'
@@ -194,17 +203,14 @@ class CryptoService {
             'SecureFlow-Mock-Secret-Change-Me-Use-High-Entropy');
       }
       derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
+      print('[SecureFlow] CryptoService: Mode M Derived Key Hex: ${derivedKey.map((b) => b.toRadixString(16).padLeft(2, "0")).join("")}');
     } else if (mode == _kModeHardware) {
-      // Mode H (ESP32 hardware / desktop parity) — strictly requires the desktop MVK.
       if (_hardwareSecret == null) {
         throw const CryptoServiceException(
             'Desktop vault secret not available.\n'
             'Go to Settings → Configure AWS Credentials and paste the Desktop Vault Secret:\n'
             'SecureFlow-Mock-Secret-Change-Me-Use-High-Entropy');
       }
-      // Try simulated hardware derivation (pyserial COM MOCK port mode):
-      // HMAC_response = HMAC-SHA256(key = _hardwareSecret, msg = hsNonce)
-      // IKM = HMAC_response + hsNonce
       try {
         final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(_hardwareSecret!));
         final hmacResp = hmac.process(hsNonce);
@@ -212,18 +218,29 @@ class CryptoService {
           ..setRange(0, _kHandshakeNonce, hmacResp)
           ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
         derivedKey = _hkdfDeriveFromIkm(ikm);
-        return _aesGcmDecrypt(derivedKey, fileNonce, ct);
-      } catch (_) {
+        print('[SecureFlow] CryptoService: Mode H Simulated Hardware Derived Key Hex: ${derivedKey.map((b) => b.toRadixString(16).padLeft(2, "0")).join("")}');
+        
+        final pt = _aesGcmDecrypt(derivedKey, fileNonce, ct);
+        print('[SecureFlow] CryptoService: Mode H Decryption SUCCESSFUL!');
+        return pt;
+      } catch (e) {
+        print('[SecureFlow] CryptoService: Mode H Simulated Hardware Decryption Failed: $e');
         // Fall back to Mock derivation if simulated hardware fails
         derivedKey?.fillRange(0, derivedKey.length, 0);
         derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
+        print('[SecureFlow] CryptoService: Mode H Fallback Mock Derived Key Hex: ${derivedKey.map((b) => b.toRadixString(16).padLeft(2, "0")).join("")}');
       }
     } else {
       throw const CryptoServiceException('Unrecognized V3 encryption mode.');
     }
 
     try {
-      return _aesGcmDecrypt(derivedKey, fileNonce, ct);
+      final pt = _aesGcmDecrypt(derivedKey, fileNonce, ct);
+      print('[SecureFlow] CryptoService: Fallthrough Decryption SUCCESSFUL!');
+      return pt;
+    } on Exception catch (e) {
+      print('[SecureFlow] CryptoService: Fallthrough Decryption Failed: $e');
+      rethrow;
     } finally {
       derivedKey.fillRange(0, derivedKey.length, 0);
     }

@@ -111,6 +111,21 @@ void main() {
       final decryptedByMock = mockSession.decryptBlob(blob);
       expect(String.fromCharCodes(decryptedByMock), equals('NFC hardware secret'));
     });
+
+    test('Absolute cross-platform byte-level parity with Python engine', () {
+      final freshSession = CryptoService();
+      freshSession.updateHardwareSecret(mockSecret);
+
+      final pythonEncryptedBlob = _parseHex(
+        '534656334d936e57975c749a7fb6f5fa0b11b96e130c315263cb839257226e6eafdc35ad7b5da9de21acb59524f51774b4e48835d0f02ac673fe591aa3e8f3f2a98bb4a4b502fed61a7e6afa32d3fbf72672e092dd608f5cf0a6f6ec1907c4f2e9f85f6bf0ba3033ade31ee16dd67d3d3e7531'
+      );
+
+      final decrypted = freshSession.decryptBlob(pythonEncryptedBlob);
+      expect(
+        String.fromCharCodes(decrypted),
+        equals('Hello SecureFlow Cross-Platform Decryption Parity!'),
+      );
+    });
   });
 }
 

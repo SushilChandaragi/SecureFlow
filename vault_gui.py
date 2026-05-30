@@ -1027,6 +1027,12 @@ class VaultGUI(ctk.CTk):
             return
 
         try:
+            import warnings
+            try:
+                from sklearn.exceptions import InconsistentVersionWarning
+                warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+            except ImportError:
+                pass
             self._ml_local_model = joblib.load(self._ml_model_path)
             self._ml_local_model_ready = True
             self._update_ml_mode("Model loaded: Real-time inference active", is_error=False)

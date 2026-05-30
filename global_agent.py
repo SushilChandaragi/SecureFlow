@@ -61,6 +61,12 @@ class GlobalEDRAgent:
         """Safely load local biometric ML model from workspace directory."""
         if self.model_path.exists():
             try:
+                import warnings
+                try:
+                    from sklearn.exceptions import InconsistentVersionWarning
+                    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+                except ImportError:
+                    pass
                 self.model_pipeline = joblib.load(self.model_path)
                 print(f"[EDR] Successfully unpickled biometric pipeline from {self.model_path}")
             except Exception as e:

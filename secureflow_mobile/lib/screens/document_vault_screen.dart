@@ -67,12 +67,13 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
           ? crypto.encryptToBlob(bytes)
           : bytes;
 
-      await cloud.uploadVaultFile(encrypted, file.name);
+      final uploadName = file.name.endsWith('.enc') ? file.name : '${file.name}.enc';
+      await cloud.uploadVaultFile(encrypted, uploadName);
 
       // Refresh the file list
       ref.invalidate(vaultFilesProvider);
       
-      _showSnack('UPLOADED: ${file.name}');
+      _showSnack('UPLOADED: $uploadName');
     } catch (e) {
       _showSnack('UPLOAD FAILED: $e', isError: true);
     } finally {
@@ -252,6 +253,46 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     }
   }
 
+  Future<void> _syncAllToCloud() async {
+    final docs = ref.read(documentProvider);
+    final unsynced = docs.where((d) => !d.isSynced).toList();
+    if (unsynced.isEmpty) {
+      _showSnack('ALL DOCUMENTS ARE ALREADY SYNCED');
+      return;
+    }
+
+    final cloud = ref.read(cloudServiceProvider).valueOrNull;
+    if (cloud == null) {
+      _showSnack('CLOUD NOT CONFIGURED — ADD AWS CREDENTIALS IN SETTINGS', isError: true);
+      return;
+    }
+
+    final crypto = ref.read(cryptoServiceProvider);
+    if (!crypto.isUnlocked) {
+      _showSnack('VAULT LOCKED — DECRYPTION REQUIRED', isError: true);
+      return;
+    }
+
+    setState(() => _uploading = true);
+    int successCount = 0;
+    try {
+      for (final doc in unsynced) {
+        final plainBytes = await ref.read(documentProvider.notifier).openDocument(doc.id);
+        final encBlob = crypto.encryptToBlob(plainBytes);
+        await cloud.uploadVaultFile(encBlob, 'docs/${doc.id}.enc');
+        await ref.read(databaseServiceProvider).markSynced(doc.id);
+        successCount++;
+      }
+      await ref.read(documentProvider.notifier).load();
+      ref.invalidate(vaultFilesProvider);
+      _showSnack('SUCCESSFULLY SYNCED $successCount DOCUMENT${successCount == 1 ? '' : 'S'} TO S3');
+    } catch (e) {
+      _showSnack('SYNC FAILED AFTER $successCount SUCCESSFUL: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final docs = ref.watch(documentProvider);
@@ -295,19 +336,51 @@ class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 // Header
                 Padding(
                   padding: const EdgeInsets.all(SFSpacing.base),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text('DOCUMENT VAULT', style: SFTypography.h1),
-                      const SizedBox(height: 4),
-                      Text(
-                        _showCloud
-                            ? (filesAsync.valueOrNull != null
-                                ? '${filesAsync.value!.length} FILE${filesAsync.value!.length == 1 ? '' : 'S'} · S3 CLOUD'
-                                : 'CLOUD FILES · S3 CLOUD')
-                            : '${docs.length} DOCUMENT${docs.length == 1 ? '' : 'S'}',
-                        style: SFTypography.metadata.copyWith(color: SFColors.textFaint),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('DOCUMENT VAULT', style: SFTypography.h1),
+                          const SizedBox(height: 4),
+                          Text(
+                            _showCloud
+                                ? (filesAsync.valueOrNull != null
+                                    ? '${filesAsync.value!.length} FILE${filesAsync.value!.length == 1 ? '' : 'S'} · S3 CLOUD'
+                                    : 'CLOUD FILES · S3 CLOUD')
+                                : '${docs.length} DOCUMENT${docs.length == 1 ? '' : 'S'}',
+                            style: SFTypography.metadata.copyWith(color: SFColors.textFaint),
+                          ),
+                        ],
                       ),
+                      if (!_showCloud && docs.any((d) => !d.isSynced))
+                        GestureDetector(
+                          onTap: _syncAllToCloud,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: SFColors.bgElevated,
+                              borderRadius: BorderRadius.circular(SFRadius.small),
+                              border: Border.all(color: SFColors.borderSoft),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.sync, size: 14, color: SFColors.success),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'SYNC ALL',
+                                  style: SFTypography.terminal.copyWith(
+                                    fontSize: 10,
+                                    color: SFColors.success,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),

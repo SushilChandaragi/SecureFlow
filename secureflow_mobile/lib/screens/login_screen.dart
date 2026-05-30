@@ -149,21 +149,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   }
 
   /// Decode NDEF text record bytes → plain string.
-  /// NDEF Text Record: byte[0] = status (0x02 = UTF-8, lang len = low 6 bits),
-  /// then lang code bytes, then the actual text.
+  /// Since auth_service.dart's _extractPayload already strips the NDEF header and language code,
+  /// the payload here is the raw string bytes (potentially zero-padded to 32 bytes).
   String _payloadToString(Uint8List payload) {
     try {
       if (payload.isEmpty) return '';
-      final status = payload[0];
-      final langLen = status & 0x3F;
-      final textStart = 1 + langLen;
-      if (textStart < payload.length) {
-        return String.fromCharCodes(payload.sublist(textStart)).trim();
-      }
-      // Fallback: treat whole payload as UTF-8
-      return String.fromCharCodes(payload).trim();
+      // Filter out any zero padding / null bytes
+      final cleanBytes = payload.where((b) => b != 0).toList();
+      return utf8.decode(cleanBytes).trim();
     } catch (_) {
-      return String.fromCharCodes(payload).trim();
+      final cleanBytes = payload.where((b) => b != 0).toList();
+      return String.fromCharCodes(cleanBytes).trim();
     }
   }
 

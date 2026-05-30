@@ -67,6 +67,11 @@ class CryptoEngine:
     def is_unlocked(self) -> bool:
         return self._key is not None
 
+    def get_mvk_bytes(self) -> bytes:
+        """Return the stripped raw bytes of mock_hardware_secret.txt."""
+        return self._load_hardware_secret()
+
+
     def mock_handshake(self) -> bool:
         """Simulate a hardware-backed handshake to derive a session key.
 
