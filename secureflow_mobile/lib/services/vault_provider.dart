@@ -204,6 +204,15 @@ class SessionNotifier extends StateNotifier<SessionState> {
   Future<void> _setUnlocked({required String authMethod}) async {
     sfLog('Session: unlocked via $authMethod');
     
+    // Read the master vault key from secure storage and immediately inject it into CryptoService
+    final desktopKeyBytes = await _storage.loadDesktopSecretBytes();
+    if (desktopKeyBytes != null) {
+      sfLog('Session: Injecting MVK (${desktopKeyBytes.length}B) into CryptoService');
+      _crypto.updateHardwareSecret(desktopKeyBytes);
+    } else {
+      sfLog('Session: MVK not found in secure storage');
+    }
+
     // Load or generate a device-unique secret for local SQLite encryption.
     // This remains completely decoupled from whether we are paired to a desktop.
     var secret = await _storage.loadMockHardwareSecret();

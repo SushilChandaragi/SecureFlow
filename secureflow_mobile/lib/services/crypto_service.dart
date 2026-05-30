@@ -194,9 +194,15 @@ class CryptoService {
             'SecureFlow-Mock-Secret-Change-Me-Use-High-Entropy');
       }
       derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
-    } else if (mode == _kModeHardware && _hardwareSecret != null) {
-      // Mode H (ESP32 hardware) — but we have the desktop secret.
-      // First try: Try simulated hardware derivation (pyserial COM MOCK port mode):
+    } else if (mode == _kModeHardware) {
+      // Mode H (ESP32 hardware / desktop parity) — strictly requires the desktop MVK.
+      if (_hardwareSecret == null) {
+        throw const CryptoServiceException(
+            'Desktop vault secret not available.\n'
+            'Go to Settings → Configure AWS Credentials and paste the Desktop Vault Secret:\n'
+            'SecureFlow-Mock-Secret-Change-Me-Use-High-Entropy');
+      }
+      // Try simulated hardware derivation (pyserial COM MOCK port mode):
       // HMAC_response = HMAC-SHA256(key = _hardwareSecret, msg = hsNonce)
       // IKM = HMAC_response + hsNonce
       try {
@@ -212,36 +218,12 @@ class CryptoService {
         derivedKey?.fillRange(0, derivedKey.length, 0);
         derivedKey = _hkdfDerive(_hardwareSecret!, hsNonce);
       }
-    } else if (mode == _kModeHardware && _nfcPayload != null) {
-      // Hardware mode, no desktop secret — use NFC payload.
-      final ikm = Uint8List(_kHandshakeNonce * 2)
-        ..setRange(0, _kHandshakeNonce, _nfcPayload!)
-        ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
-      derivedKey = _hkdfDeriveFromIkm(ikm);
     } else {
-      throw const CryptoServiceException(
-          'Cannot decrypt hardware-mode file:\n'
-          '• If encrypted with ESP32: Pair the desktop via QR code in Settings.\n'
-          '• If encrypted with desktop software: Set the Desktop Vault Secret in Settings.');
+      throw const CryptoServiceException('Unrecognized V3 encryption mode.');
     }
 
     try {
       return _aesGcmDecrypt(derivedKey, fileNonce, ct);
-    } on CryptoServiceException {
-      // If mock-key fallback failed for Mode H, try NFC payload if we have it.
-      if (mode == _kModeHardware && _hardwareSecret != null && _nfcPayload != null) {
-        derivedKey.fillRange(0, derivedKey.length, 0);
-        final ikm = Uint8List(_kHandshakeNonce * 2)
-          ..setRange(0, _kHandshakeNonce, _nfcPayload!)
-          ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, hsNonce);
-        final nfcKey = _hkdfDeriveFromIkm(ikm);
-        try {
-          return _aesGcmDecrypt(nfcKey, fileNonce, ct);
-        } finally {
-          nfcKey.fillRange(0, nfcKey.length, 0);
-        }
-      }
-      rethrow;
     } finally {
       derivedKey.fillRange(0, derivedKey.length, 0);
     }

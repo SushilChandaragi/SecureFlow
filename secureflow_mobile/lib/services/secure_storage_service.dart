@@ -18,7 +18,7 @@ class SecureStorageService {
   static const _kAwsRegion       = 'sf_aws_region';
   static const _kS3Bucket        = 'sf_s3_bucket_name';
   static const _kMockHardware    = 'sf_mock_hardware_secret';
-  static const _kDesktopSecret   = 'sf_desktop_shared_secret'; // UTF-8 of mock_hardware_secret.txt
+  static const _kDesktopSecret   = 'sf_master_vault_key'; // UTF-8 of mock_hardware_secret.txt
   static const _kNfcExpected     = 'sf_nfc_expected_secret';      // bytes (legacy)
   static const _kNfcExpectedStr  = 'sf_nfc_expected_string';      // plain UTF-8
   static const _kPasswordStore   = 'sf_password_store_cache';
