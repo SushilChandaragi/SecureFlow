@@ -91,6 +91,26 @@ void main() {
       const expectedKeyHex = 'd50939b067e2f4ec79067ad2e5e1c69762c7f3ef63936cab14e09684b1415d55';
       expect(derivedKey, equals(_parseHex(expectedKeyHex)));
     });
+    test('NFC handshake unlocks and provides Mode H parity', () {
+      cryptoService.nfcHandshake(mockSecret);
+      expect(cryptoService.isUnlocked, isTrue);
+      expect(cryptoService.handshakeMode, equals('nfc'));
+
+      final plaintext = Uint8List.fromList('NFC hardware secret'.codeUnits);
+      final blob = cryptoService.encryptToBlob(plaintext);
+      expect(blob, isNotNull);
+      expect(blob[4], equals(0x48)); // _kModeHardware = 0x48 = 'H'
+
+      // NFC unlocked session can decrypt its own blob
+      final decrypted = cryptoService.decryptBlob(blob);
+      expect(String.fromCharCodes(decrypted), equals('NFC hardware secret'));
+
+      // A fresh Mock/QR-paired session (with mockSecret) can decrypt this NFC Mode H blob
+      final mockSession = CryptoService();
+      mockSession.mockHandshake(mockSecret);
+      final decryptedByMock = mockSession.decryptBlob(blob);
+      expect(String.fromCharCodes(decryptedByMock), equals('NFC hardware secret'));
+    });
   });
 }
 

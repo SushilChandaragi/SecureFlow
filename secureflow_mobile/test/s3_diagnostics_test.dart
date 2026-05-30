@@ -27,12 +27,12 @@ void main() {
     final inventory = await cloud.getVaultInventory();
     print('  Found: $inventory');
 
-    final unsafe = inventory.where((k) => k.contains(' ')).toList();
+    final unsafe = inventory.where((info) => info.key.contains(' ')).toList();
     expect(unsafe, isEmpty, reason: 'No file keys should contain spaces after migration');
     print('  All keys are space-free. PASS.');
 
     if (inventory.isNotEmpty) {
-      final key = inventory.first;
+      final key = inventory.first.key;
       print('\n[2] Downloading "$key"...');
       final data = await cloud.downloadToBuffer(key);
       expect(data.length, greaterThan(0));

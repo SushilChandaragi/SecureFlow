@@ -81,12 +81,18 @@ class CryptoService {
   /// Perform NFC-backed handshake.
   void nfcHandshake(Uint8List nfcPayload) {
     _wipeKey();
+    _nfcPayload = Uint8List.fromList(nfcPayload);
+    _hardwareSecret = Uint8List.fromList(nfcPayload);
     _handshakeNonce = _randomBytes(_kHandshakeNonce);
+
+    // Compute HMAC signature of _handshakeNonce using the NFC payload as key (Mode H parity)
+    final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(_hardwareSecret!));
+    final hmacResp = hmac.process(_handshakeNonce!);
+
     final ikm = Uint8List(_kHandshakeNonce * 2)
-      ..setRange(0, _kHandshakeNonce, nfcPayload)
+      ..setRange(0, _kHandshakeNonce, hmacResp)
       ..setRange(_kHandshakeNonce, _kHandshakeNonce * 2, _handshakeNonce!);
     _sessionKey = _hkdfDeriveFromIkm(ikm);
-    _nfcPayload = Uint8List.fromList(nfcPayload); // keep for re-derive
     _handshakeMode = 'nfc';
     _isLocked = false;
   }
