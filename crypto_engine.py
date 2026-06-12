@@ -176,6 +176,19 @@ class CryptoEngine:
 
         return self.VAULT_HEADER_V3 + mode + self._handshake_nonce + file_nonce + ciphertext
 
+    def encrypt_bytes_mode_m(self, data: bytes) -> bytes:
+        """Encrypt bytes using the MVK path (Mode M), independent of session mode."""
+        secret = self._load_hardware_secret()
+        handshake_nonce = secrets.token_bytes(self.HKDF_NONCE_SIZE)
+        derived_key = self._derive_key(secret, handshake_nonce)
+        try:
+            file_nonce = secrets.token_bytes(self.FILE_NONCE_SIZE)
+            aesgcm = AESGCM(bytes(derived_key))
+            ciphertext = aesgcm.encrypt(file_nonce, data, None)
+            return self.VAULT_HEADER_V3 + self.MODE_MOCK + handshake_nonce + file_nonce + ciphertext
+        finally:
+            self._wipe_key(derived_key)
+
     def decrypt_bytes(self, data: bytes) -> bytes:
         """Decrypt raw V3 blob bytes and return decrypted plaintext bytes."""
         return self.decrypt_blob(data)

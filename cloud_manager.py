@@ -41,6 +41,15 @@ class CloudManager:
     def bucket(self) -> str:
         return self._bucket
 
+    def _sanitize_key(self, raw_key: str) -> str:
+        # Replace any character outside A-Z a-z 0-9 . _ - with underscore.
+        # This guarantees the S3 key is valid for SigV4 canonical path signing
+        # on all clients (boto3, aws_signature_v4 Dart, etc.).
+        key = re.sub(r"[^A-Za-z0-9._-]", "_", raw_key)
+        if key != raw_key:
+            logger.info("S3 key sanitised: '%s' -> '%s'", raw_key, key)
+        return key
+
     def upload_vault_file(
         self,
         local_filepath: str,
@@ -60,12 +69,7 @@ class CloudManager:
             raise CloudManagerError(f"Local file not found: {local_filepath}")
 
         raw_key = object_name or os.path.basename(local_filepath)
-        # Replace any character outside A-Z a-z 0-9 . _ - with underscore.
-        # This guarantees the S3 key is valid for SigV4 canonical path signing
-        # on all clients (boto3, aws_signature_v4 Dart, etc.).
-        key = re.sub(r"[^A-Za-z0-9._-]", "_", raw_key)
-        if key != raw_key:
-            logger.info("S3 key sanitised: '%s' -> '%s'", raw_key, key)
+        key = self._sanitize_key(raw_key)
         try:
             self._s3.upload_file(local_filepath, self._bucket, key)
         except (ClientError, NoCredentialsError, EndpointConnectionError) as exc:
@@ -78,6 +82,15 @@ class CloudManager:
             except OSError as exc:
                 logger.exception("Local delete failed after upload")
                 raise CloudManagerError(f"Upload succeeded, but delete failed: {exc}") from exc
+
+    def upload_vault_bytes(self, data: bytes, object_name: str) -> None:
+        """Upload encrypted bytes directly to S3 without writing to disk."""
+        key = self._sanitize_key(object_name)
+        try:
+            self._s3.put_object(Bucket=self._bucket, Key=key, Body=data)
+        except (ClientError, NoCredentialsError, EndpointConnectionError) as exc:
+            logger.exception("S3 upload failed")
+            raise CloudManagerError(f"Upload failed: {exc}") from exc
 
     def get_vault_inventory(self) -> List[str]:
         """Return a list of object keys currently in the bucket."""

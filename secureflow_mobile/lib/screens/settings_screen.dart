@@ -577,6 +577,8 @@ class _AwsConfigSheetState extends ConsumerState<_AwsConfigSheet> {
                               _sharedSecretCtrl.text = trimmed;
                               _showQrScanner = false;
                             });
+                            final bytes = Uint8List.fromList(utf8.encode(trimmed));
+                            ref.read(cryptoServiceProvider).updateHardwareSecret(bytes);
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text('🟢 DESKTOP SECRET CAPTURED SUCCESSFULLY!'),

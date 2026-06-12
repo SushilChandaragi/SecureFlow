@@ -51,6 +51,10 @@ class CloudService {
 
   String get _baseUrl => 'https://$bucketName.s3.$region.amazonaws.com';
 
+  Uri _objectUri(String objectKey) {
+    return Uri.parse('$_baseUrl/${Uri.encodeFull(objectKey)}');
+  }
+
   // ── Inventory ──────────────────────────────────────────────────────────────
 
   /// List all .enc objects in the S3 bucket with size and modified time.
@@ -120,7 +124,7 @@ class CloudService {
   /// Download an object to a RAM buffer — never writes to disk.
   Future<Uint8List> downloadToBuffer(String objectKey) async {
     final request = AWSHttpRequest.get(
-      Uri.parse('$_baseUrl/${Uri.encodeComponent(objectKey)}'),
+      _objectUri(objectKey),
     );
 
     final signed = await _signer.sign(request, credentialScope: _s3Scope);
@@ -132,7 +136,9 @@ class CloudService {
     );
 
     if (response.statusCode != 200) {
-      throw CloudServiceException('S3 download failed: ${response.statusCode}');
+      throw CloudServiceException(
+        'S3 download failed: ${response.statusCode} ${response.body}',
+      );
     }
     return response.bodyBytes;
   }
@@ -142,7 +148,7 @@ class CloudService {
   /// Upload encrypted bytes to S3.
   Future<void> uploadVaultFile(Uint8List data, String objectKey) async {
     final request = AWSHttpRequest.put(
-      Uri.parse('$_baseUrl/${Uri.encodeComponent(objectKey)}'),
+      _objectUri(objectKey),
       headers: const {'Content-Type': 'application/octet-stream'},
       body: data,
     );
@@ -157,7 +163,9 @@ class CloudService {
     );
 
     if (response.statusCode != 200 && response.statusCode != 204) {
-      throw CloudServiceException('S3 upload failed: ${response.statusCode}');
+      throw CloudServiceException(
+        'S3 upload failed: ${response.statusCode} ${response.body}',
+      );
     }
   }
 
@@ -166,7 +174,7 @@ class CloudService {
   /// Cryptographic shred — delete an object from S3.
   Future<void> deleteVaultFile(String objectKey) async {
     final request = AWSHttpRequest.delete(
-      Uri.parse('$_baseUrl/${Uri.encodeComponent(objectKey)}'),
+      _objectUri(objectKey),
     );
 
     final signed = await _signer.sign(request, credentialScope: _s3Scope);
@@ -178,7 +186,9 @@ class CloudService {
     );
 
     if (response.statusCode != 204 && response.statusCode != 200) {
-      throw CloudServiceException('S3 delete failed: ${response.statusCode}');
+      throw CloudServiceException(
+        'S3 delete failed: ${response.statusCode} ${response.body}',
+      );
     }
   }
 

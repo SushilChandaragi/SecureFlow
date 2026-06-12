@@ -2057,7 +2057,8 @@ class VaultGUI(ctk.CTk):
             if self.cloud:
                 self._set_status_message("Uploading to AWS...")
                 self._log_event("Uploading encrypted file to AWS S3.")
-                self.cloud.upload_vault_file(str(dest_path), dest_path.name, delete_local=False)
+                blob, key = self._prepare_cloud_upload_blob(dest_path)
+                self.cloud.upload_vault_bytes(blob, key)
                 self._set_status_message(f"Uploaded to AWS: {dest_path.name}")
                 self._log_event(f"Uploaded to AWS: {dest_path.name}")
 
@@ -2075,6 +2076,15 @@ class VaultGUI(ctk.CTk):
             self._set_status_message(f"Unexpected error: {exc}", is_error=True)
             self._log_event(f"Encrypt failed: {exc}")
             logger.exception("Encrypt failed")
+
+    def _prepare_cloud_upload_blob(self, enc_path: Path) -> tuple[bytes, str]:
+        """Return a Mode M blob for cloud upload, re-encrypting Mode H files in RAM."""
+        blob = enc_path.read_bytes()
+        if blob[:4] == self.crypto.VAULT_HEADER_V3 and blob[4:5] == self.crypto.MODE_HARDWARE:
+            plaintext = self.crypto.decrypt_blob(blob)
+            blob = self.crypto.encrypt_bytes_mode_m(plaintext)
+            self._log_event("Re-encrypted Mode H blob to Mode M for cloud upload.")
+        return blob, enc_path.name
 
     def _on_upload_to_cloud(self) -> None:
         """Pick one or more already-encrypted .enc files and upload them to S3.
@@ -2125,7 +2135,8 @@ class VaultGUI(ctk.CTk):
             for filepath in selected:
                 path = Path(filepath)
                 try:
-                    self.cloud.upload_vault_file(str(path), path.name, delete_local=False)
+                    blob, key = self._prepare_cloud_upload_blob(path)
+                    self.cloud.upload_vault_bytes(blob, key)
                     results.append((path.name, None))
                 except (CloudManagerError, Exception) as exc:
                     results.append((path.name, exc))

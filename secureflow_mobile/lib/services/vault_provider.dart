@@ -85,6 +85,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
   final CryptoService _crypto;
   final SecureStorageService _storage;
   final DatabaseService _db;
+  static final RegExp _nfcKeyPattern = RegExp(r'^SECUREFLOW-NFC-KEY-V1-[A-Z0-9]{8}$');
 
   SessionNotifier(this._crypto, this._storage, this._db)
       : super(const SessionState());
@@ -124,8 +125,11 @@ class SessionNotifier extends StateNotifier<SessionState> {
     state = state.copyWith(isLoading: true, statusMessage: 'VERIFYING NFC KEY...');
     try {
       final expected = await _storage.loadNfcSecretString();
-      if (expected == null || expected.isEmpty) {
-        sfLog('Session: NFC string not bound — binding to: $trimmed');
+      final expectedValid = expected != null && _nfcKeyPattern.hasMatch(expected);
+      if (!expectedValid) {
+        if (expected != null && expected.isNotEmpty) {
+          sfLog('Session: NFC key invalid/legacy. Rebinding to new tag.');
+        }
         await _storage.saveNfcSecretString(trimmed);
       } else if (expected != trimmed) {
         sfLog('Session: NFC string mismatch. Expected="$expected" got="$trimmed"');

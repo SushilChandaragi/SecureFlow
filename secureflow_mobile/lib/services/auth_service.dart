@@ -5,6 +5,7 @@
 ///   2. NFC tag reading (nfc_manager) — 32-byte payload on tag = the hardware secret
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:local_auth/local_auth.dart';
 import 'package:nfc_manager/nfc_manager.dart';
@@ -133,13 +134,13 @@ class AuthService {
           final payload = rec.payload;
           if (payload.isNotEmpty) {
             // NDEF Text Record starts with 1 status byte + language code.
-            // Skip the language prefix if present.
-            if (payload[0] == 0x02 || payload[0] == 0x03) {
-              final langLen = payload[0] & 0x3F;
-              if (payload.length > 1 + langLen) {
-                return Uint8List.fromList(
-                  payload.sublist(1 + langLen),
-                );
+            // Decode it to canonical UTF-8 bytes for stable comparisons.
+            if (rec.typeNameFormat == NdefTypeNameFormat.nfcWellknown &&
+                rec.type.length == 1 &&
+                rec.type[0] == 0x54) { // 'T'
+              final text = _decodeNdefText(payload);
+              if (text != null) {
+                return Uint8List.fromList(utf8.encode(text));
               }
             }
             return Uint8List.fromList(payload);
@@ -148,6 +149,41 @@ class AuthService {
       }
     }
     return _extractUid(tag);
+  }
+
+  String? _decodeNdefText(Uint8List payload) {
+    if (payload.isEmpty) return null;
+    final status = payload[0];
+    final langLen = status & 0x3F;
+    if (payload.length <= 1 + langLen) return '';
+    final textBytes = Uint8List.fromList(payload.sublist(1 + langLen));
+    final isUtf16 = (status & 0x80) != 0;
+    if (!isUtf16) {
+      return utf8.decode(textBytes, allowMalformed: true);
+    }
+    return _decodeUtf16(textBytes);
+  }
+
+  String _decodeUtf16(Uint8List bytes) {
+    if (bytes.length < 2) return '';
+    var offset = 0;
+    Endian endian = Endian.big;
+    if (bytes.length >= 2) {
+      final bom = (bytes[0] << 8) | bytes[1];
+      if (bom == 0xFEFF) {
+        endian = Endian.big;
+        offset = 2;
+      } else if (bom == 0xFFFE) {
+        endian = Endian.little;
+        offset = 2;
+      }
+    }
+    final data = ByteData.sublistView(bytes, offset);
+    final codes = <int>[];
+    for (var i = 0; i + 1 < data.lengthInBytes; i += 2) {
+      codes.add(data.getUint16(i, endian));
+    }
+    return String.fromCharCodes(codes);
   }
 
   Uint8List? _extractUid(NfcTag tag) {

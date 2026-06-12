@@ -153,19 +153,19 @@ class CryptoService {
 
   /// Update active hardware secret (used when desktop secret is configured/paired in settings).
   void updateHardwareSecret(Uint8List secret) {
-    _wipeKey();
+    _hardwareSecret?.fillRange(0, _hardwareSecret!.length, 0);
     _hardwareSecret = Uint8List.fromList(secret);
-    _handshakeNonce = _randomBytes(_kHandshakeNonce);
-    _sessionKey = _hkdfDerive(secret, _handshakeNonce!);
-    _handshakeMode = 'mock';
-    _isLocked = false;
   }
 
   /// Clear active hardware secret.
   void clearHardwareSecret() {
-    _wipeKey();
-    _isLocked = true;
-    _handshakeMode = 'none';
+    _hardwareSecret?.fillRange(0, _hardwareSecret!.length, 0);
+    _hardwareSecret = null;
+  }
+
+  /// HKDF helper for parity tests (Mode M derivation).
+  Uint8List deriveKey(Uint8List secret, Uint8List salt) {
+    return _hkdfDerive(secret, salt);
   }
 
   // ── Internal — Format Decryptors ───────────────────────────────────────────
