@@ -233,12 +233,12 @@ class _DocumentViewerScreenState extends ConsumerState<DocumentViewerScreen> {
                                 ),
                 ),
 
-                // ── Panic close button ────────────────────────────
+                // ── Close file button ────────────────────────────
                 Padding(
                   padding: const EdgeInsets.all(SFSpacing.base),
                   child: PanicButton(
                     label: SFCopy.panicClose,
-                    icon: Icons.bolt,
+                    icon: Icons.close,
                     onPressed: _panicClose,
                   ),
                 ),

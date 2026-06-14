@@ -36,7 +36,7 @@ abstract final class SFCopy {
   static const threatIntel      = 'THREAT INTELLIGENCE';
   static const secureUpload     = 'SECURE UPLOAD';
   static const ramOnly          = 'RAM-ONLY SESSION';
-  static const panicClose       = 'PANIC CLOSE';
+  static const panicClose       = 'CLOSE FILE';
   static const vaultDestruction = 'VAULT DESTRUCTION';
   static const emergencyLock    = 'EMERGENCY LOCK MODE';
 

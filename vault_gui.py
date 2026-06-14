@@ -285,11 +285,13 @@ class VaultGUI(ctk.CTk):
 
         self.panic_button = ctk.CTkButton(
             self.sidebar_frame,
-            text="🔒 LOCK VAULT & WIPE RAM",
-            fg_color=COLORS["danger"],
+            text="✕ Close File",
+            fg_color=COLORS["panel_alt"],
             hover_color=COLORS["danger_hover"],
             text_color=COLORS["text"],
-            command=self._on_panic,
+            border_width=1,
+            border_color=COLORS["border"],
+            command=self._on_close_file,
         )
         self.panic_button.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 16))
 
@@ -540,6 +542,9 @@ class VaultGUI(ctk.CTk):
         )
         ctk.CTkLabel(header, text="Reveal", font=FONTS["mono"], text_color=COLORS["muted"]).grid(
             row=0, column=3, sticky="w", padx=(24, 0)
+        )
+        ctk.CTkLabel(header, text="Delete", font=FONTS["mono"], text_color=COLORS["muted"]).grid(
+            row=0, column=4, sticky="w", padx=(24, 0)
         )
 
     def _build_authenticator_tab(self) -> None:
@@ -1193,7 +1198,7 @@ class VaultGUI(ctk.CTk):
             row.destroy()
         self._password_rows.clear()
 
-        for entry in self._password_store.values():
+        for key, entry in list(self._password_store.items()):
             row = ctk.CTkFrame(self.password_list_frame, fg_color="transparent")
             row.pack(fill="x", padx=12, pady=6)
 
@@ -1214,15 +1219,19 @@ class VaultGUI(ctk.CTk):
 
             state = {"visible": False}
 
-            def toggle() -> None:
-                state["visible"] = not state["visible"]
-                if state["visible"]:
-                    password_label.configure(text=entry["password"])
-                    reveal_button.configure(text="Hide")
-                else:
-                    password_label.configure(text="******")
-                    reveal_button.configure(text="Reveal")
+            def make_toggle(lbl, btn_ref, pwd):
+                st = {"visible": False}
+                def toggle():
+                    st["visible"] = not st["visible"]
+                    if st["visible"]:
+                        lbl.configure(text=pwd)
+                        btn_ref[0].configure(text="Hide")
+                    else:
+                        lbl.configure(text="******")
+                        btn_ref[0].configure(text="Reveal")
+                return toggle
 
+            reveal_btn_ref = [None]
             reveal_button = ctk.CTkButton(
                 row,
                 text="Reveal",
@@ -1232,9 +1241,28 @@ class VaultGUI(ctk.CTk):
                 text_color=COLORS["text"],
                 border_width=1,
                 border_color=COLORS["border"],
-                command=toggle,
+                command=make_toggle(password_label, reveal_btn_ref, entry["password"]),
             )
+            reveal_btn_ref[0] = reveal_button
             reveal_button.grid(row=0, column=3, sticky="w", padx=(24, 0))
+
+            def make_delete(k):
+                def delete():
+                    if messagebox.askyesno("Delete Password", f"Delete entry for '{self._password_store.get(k, {}).get('website', k)}'?"):
+                        self._password_store.pop(k, None)
+                        self._render_password_rows()
+                        self._save_passwords_to_vault()
+                return delete
+
+            ctk.CTkButton(
+                row,
+                text="🗑 Delete",
+                width=90,
+                fg_color=COLORS["danger"],
+                hover_color=COLORS["danger_hover"],
+                text_color=COLORS["text"],
+                command=make_delete(key),
+            ).grid(row=0, column=4, sticky="w", padx=(24, 0))
 
             self._password_rows.append(row)
 
@@ -1395,8 +1423,11 @@ class VaultGUI(ctk.CTk):
                 text_color=COLORS["muted"],
             ).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 8))
 
+            btn_col = ctk.CTkFrame(row, fg_color="transparent")
+            btn_col.grid(row=0, column=1, rowspan=2, padx=8, pady=8, sticky="e")
+
             ctk.CTkButton(
-                row,
+                btn_col,
                 text="View",
                 width=70,
                 fg_color=COLORS["panel_alt"],
@@ -1405,7 +1436,41 @@ class VaultGUI(ctk.CTk):
                 border_width=1,
                 border_color=COLORS["border"],
                 command=lambda k=key_id: self._select_totp_key(k),
-            ).grid(row=0, column=1, rowspan=2, padx=8, pady=8, sticky="e")
+            ).pack(pady=(0, 4))
+
+            def make_totp_delete(kid):
+                def delete():
+                    entry_data = self._totp_store.get(kid, {})
+                    lbl = str(entry_data.get("label") or kid)
+                    if messagebox.askyesno("Delete Key", f"Delete TOTP key '{lbl}'?"):
+                        self._totp_store.pop(kid, None)
+                        if self._totp_selected_id == kid:
+                            self._totp_selected_id = None
+                            self._totp_secret = None
+                            self._totp_issuer = ""
+                            self._totp_account = ""
+                            self._totp_period = 30
+                            self._totp_last_step = -1
+                            self.totp_detail_name.configure(text="No key selected")
+                            self.totp_detail_meta.configure(text="")
+                            self.totp_label.configure(text="SELECT KEY")
+                            self.totp_progress.set(0.0)
+                        if self._totp_store:
+                            self._select_totp_key(next(iter(self._totp_store)))
+                        self._render_totp_rows()
+                        self._update_totp_status()
+                        self._save_totp_store_to_vault()
+                return delete
+
+            ctk.CTkButton(
+                btn_col,
+                text="🗑 Del",
+                width=70,
+                fg_color=COLORS["danger"],
+                hover_color=COLORS["danger_hover"],
+                text_color=COLORS["text"],
+                command=make_totp_delete(key_id),
+            ).pack()
 
             self._totp_rows.append(row)
 
@@ -2321,6 +2386,16 @@ class VaultGUI(ctk.CTk):
     def _update_zoom_label(self) -> None:
         percent = int(self._zoom_factor * 50)
         self.zoom_label.configure(text=f"{percent}%")
+
+    def _on_close_file(self) -> None:
+        """Clear the currently open file from the viewer without locking the vault."""
+        if not self._viewer_has_content:
+            self._set_status_message("No file is currently open.", is_error=False)
+            return
+        self._clear_viewer("Select an encrypted file to view it.")
+        self._last_selected_object = None
+        self._set_status_message("File closed.")
+        self._log_event("File closed from viewer.")
 
     def _on_panic(self) -> None:
         # Flush unsaved in-memory data BEFORE wiping the key, otherwise the
